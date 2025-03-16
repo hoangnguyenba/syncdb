@@ -17,6 +17,7 @@ type Config struct {
 		Database string
 		Tables   []string
 		Filepath string
+		Format   string
 	}
 	Export struct {
 		Driver   string
@@ -27,6 +28,7 @@ type Config struct {
 		Database string
 		Tables   []string
 		Filepath string
+		Format   string
 	}
 }
 
@@ -58,6 +60,7 @@ func LoadConfig() (*Config, error) {
 	config.Import.Password = getViperString("syncdb_import_password", "")
 	config.Import.Database = getViperString("syncdb_import_database", "")
 	config.Import.Filepath = getViperString("syncdb_import_filepath", "backup.json")
+	config.Import.Format = getViperString("syncdb_import_format", "json")
 
 	// Handle import tables
 	if tables := getViperString("syncdb_import_tables", ""); tables != "" {
@@ -72,6 +75,7 @@ func LoadConfig() (*Config, error) {
 	config.Export.Password = getViperString("syncdb_export_password", "")
 	config.Export.Database = getViperString("syncdb_export_database", "")
 	config.Export.Filepath = getViperString("syncdb_export_filepath", "backup.json")
+	config.Export.Format = getViperString("syncdb_export_format", "json")
 
 	// Handle export tables
 	if tables := getViperString("syncdb_export_tables", ""); tables != "" {

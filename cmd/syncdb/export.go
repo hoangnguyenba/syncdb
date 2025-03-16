@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hoangnguyenba/syncdb/pkg/config"
@@ -92,6 +93,13 @@ func newExportCommand() *cobra.Command {
 				filePath = cfg.Export.Filepath
 			}
 
+			var format string
+			if cmd.Flags().Changed("format") {
+				format, _ = cmd.Flags().GetString("format")
+			} else {
+				format = cfg.Export.Format
+			}
+
 			// Validate required values
 			if dbName == "" {
 				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_EXPORT_DATABASE env)")
@@ -133,24 +141,60 @@ func newExportCommand() *cobra.Command {
 				exportData.Data[table] = data
 			}
 
-			// Convert to JSON
-			jsonData, err := json.MarshalIndent(exportData, "", "  ")
-			if err != nil {
-				return fmt.Errorf("failed to marshal export data: %v", err)
+			var outputData []byte
+
+			switch format {
+			case "json":
+				outputData, err = json.MarshalIndent(exportData, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to marshal export data to JSON: %v", err)
+				}
+			case "sql":
+				// Generate SQL statements
+				var sqlStatements []string
+				for table, rows := range exportData.Data {
+					for _, row := range rows {
+						columns := make([]string, 0)
+						values := make([]string, 0)
+						for col, val := range row {
+							columns = append(columns, col)
+							if val == nil {
+								values = append(values, "NULL")
+							} else {
+								switch v := val.(type) {
+								case string:
+									values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+								case time.Time:
+									values = append(values, fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05")))
+								default:
+									values = append(values, fmt.Sprintf("%v", v))
+								}
+							}
+						}
+						stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);",
+							table,
+							strings.Join(columns, ", "),
+							strings.Join(values, ", "))
+						sqlStatements = append(sqlStatements, stmt)
+					}
+				}
+				outputData = []byte(strings.Join(sqlStatements, "\n") + "\n")
+			default:
+				return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", format)
 			}
 
 			// Create directory if it doesn't exist
 			dir := filepath.Dir(filePath)
-			if err := os.MkdirAll(dir, 0755); err != nil {
+			if err = os.MkdirAll(dir, 0755); err != nil {
 				return fmt.Errorf("failed to create directory: %v", err)
 			}
 
 			// Write to file
-			if err := os.WriteFile(filePath, jsonData, 0644); err != nil {
+			if err = os.WriteFile(filePath, outputData, 0644); err != nil {
 				return fmt.Errorf("failed to write file: %v", err)
 			}
 
-			fmt.Printf("Successfully exported %d tables to %s\n", len(tables), filePath)
+			fmt.Printf("Successfully exported %d tables to %s in %s format\n", len(tables), filePath, format)
 			return nil
 		},
 	}
@@ -164,6 +208,7 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
 	cmd.Flags().StringSlice("tables", []string{}, "Tables to export (default: all)")
 	cmd.Flags().String("file-path", "", "Output file path")
+	cmd.Flags().String("format", "json", "Output format (json, sql)")
 
 	return cmd
 }

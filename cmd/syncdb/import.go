@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 
 	"github.com/hoangnguyenba/syncdb/pkg/config"
 	"github.com/hoangnguyenba/syncdb/pkg/db"
 	"github.com/spf13/cobra"
 )
+
+var sqlInsertRegex = regexp.MustCompile(`INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\);`)
 
 func newImportCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -63,6 +67,11 @@ func newImportCommand() *cobra.Command {
 				filePath = cfg.Import.Filepath
 			}
 
+			format, _ := cmd.Flags().GetString("format")
+			if format == "json" { // default value
+				format = cfg.Import.Format
+			}
+
 			truncate, _ := cmd.Flags().GetBool("truncate")
 			upsert, _ := cmd.Flags().GetBool("upsert")
 
@@ -82,8 +91,65 @@ func newImportCommand() *cobra.Command {
 			}
 
 			var importData ExportData
-			if err := json.Unmarshal(fileData, &importData); err != nil {
-				return fmt.Errorf("failed to parse import file: %v", err)
+
+			switch format {
+			case "json":
+				if err := json.Unmarshal(fileData, &importData); err != nil {
+					return fmt.Errorf("failed to parse JSON import file: %v", err)
+				}
+			case "sql":
+				// Parse SQL file
+				sqlStatements := strings.Split(string(fileData), "\n")
+				importData = ExportData{
+					Data: make(map[string][]map[string]interface{}),
+				}
+
+				for _, stmt := range sqlStatements {
+					stmt = strings.TrimSpace(stmt)
+					if stmt == "" || !strings.HasPrefix(strings.ToUpper(stmt), "INSERT") {
+						continue
+					}
+
+					// Extract table name and values
+					matches := sqlInsertRegex.FindStringSubmatch(stmt)
+					if len(matches) != 4 {
+						continue
+					}
+
+					tableName := matches[1]
+					columns := strings.Split(matches[2], ",")
+					for i := range columns {
+						columns[i] = strings.TrimSpace(columns[i])
+					}
+
+					// Parse values
+					values := strings.Split(matches[3], ",")
+					for i := range values {
+						values[i] = strings.TrimSpace(values[i])
+					}
+
+					// Create row data
+					rowData := make(map[string]interface{})
+					for i, col := range columns {
+						val := values[i]
+						if val == "NULL" {
+							rowData[col] = nil
+						} else if strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'") {
+							// String value
+							rowData[col] = strings.Trim(val, "'")
+						} else {
+							// Numeric value
+							rowData[col] = val
+						}
+					}
+
+					if importData.Data[tableName] == nil {
+						importData.Data[tableName] = make([]map[string]interface{}, 0)
+					}
+					importData.Data[tableName] = append(importData.Data[tableName], rowData)
+				}
+			default:
+				return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", format)
 			}
 
 			// Initialize database connection
@@ -146,6 +212,7 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
 	cmd.Flags().StringSlice("tables", []string{}, "Tables to import (default: all)")
 	cmd.Flags().String("file-path", "", "Input file path")
+	cmd.Flags().String("format", "json", "Input format (json, sql)")
 
 	// Import settings flags
 	cmd.Flags().Bool("truncate", false, "Truncate tables before import")
