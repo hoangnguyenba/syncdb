@@ -6,6 +6,9 @@ SyncDB is a command-line tool written in Go that helps you export and import dat
 
 - Export database data to various storage locations
 - Import data back into databases with upsert support
+- Support for multiple database drivers:
+  - MySQL (default)
+  - PostgreSQL
 - Multiple storage options:
   - Local filesystem
   - AWS S3
@@ -39,38 +42,56 @@ go build -o syncdb cmd/syncdb/*.go
 ### Export Data
 
 ```bash
-# Basic export to local file
+# Basic MySQL export to local file
+syncdb export \
+  --host localhost \
+  --port 3306 \
+  --username myuser \
+  --password mypass \
+  --database mydb \
+  --driver mysql \
+  --storage local \
+  --file-path ./backup.json
+
+# Basic PostgreSQL export to local file
 syncdb export \
   --host localhost \
   --port 5432 \
   --username myuser \
   --password mypass \
+  --database mydb \
+  --driver postgres \
   --storage local \
   --file-path ./backup.json
 
 # Export specific tables
 syncdb export \
+  --database mydb \
   --tables table1,table2 \
   --file-path ./backup.json
 
 # Export with schema
 syncdb export \
+  --database mydb \
   --include-schema \
   --file-path ./backup.json
 
 # Export with condition
 syncdb export \
+  --database mydb \
   --condition "created_at > '2024-01-01'" \
   --file-path ./backup.json
 
 # Export to S3
 syncdb export \
+  --database mydb \
   --storage s3 \
   --s3-bucket my-bucket \
   --s3-region us-west-2
 
 # Export to Google Drive
 syncdb export \
+  --database mydb \
   --storage gdrive \
   --gdrive-folder folder_id
 ```
@@ -78,33 +99,50 @@ syncdb export \
 ### Import Data
 
 ```bash
-# Basic import from local file
+# Basic MySQL import from local file
+syncdb import \
+  --host localhost \
+  --port 3306 \
+  --username myuser \
+  --password mypass \
+  --database mydb \
+  --driver mysql \
+  --storage local \
+  --file-path ./backup.json
+
+# Basic PostgreSQL import from local file
 syncdb import \
   --host localhost \
   --port 5432 \
   --username myuser \
   --password mypass \
+  --database mydb \
+  --driver postgres \
   --storage local \
   --file-path ./backup.json
 
 # Import specific tables
 syncdb import \
+  --database mydb \
   --tables table1,table2 \
   --file-path ./backup.json
 
 # Import without upsert (insert only)
 syncdb import \
+  --database mydb \
   --upsert=false \
   --file-path ./backup.json
 
 # Import from S3
 syncdb import \
+  --database mydb \
   --storage s3 \
   --s3-bucket my-bucket \
   --s3-region us-west-2
 
 # Import from Google Drive
 syncdb import \
+  --database mydb \
   --storage gdrive \
   --gdrive-folder folder_id
 ```
@@ -114,9 +152,11 @@ syncdb import \
 ### Database Connection
 
 - `--host`: Database server address (default: "localhost")
-- `--port`: Port number (default: 5432)
+- `--port`: Port number (default: 3306 for MySQL, 5432 for PostgreSQL)
 - `--username`: Database username
 - `--password`: Database password
+- `--database`: Database name (required)
+- `--driver`: Database driver (mysql, postgres) (default: "mysql")
 - `--tables`: Comma-separated list of tables (default: all tables)
 
 ### Export Settings
@@ -153,9 +193,11 @@ SYNCDB_<FLAG_NAME>=value
 For example:
 ```bash
 export SYNCDB_HOST=localhost
-export SYNCDB_PORT=5432
+export SYNCDB_PORT=3306
 export SYNCDB_USERNAME=myuser
 export SYNCDB_PASSWORD=mypass
+export SYNCDB_DATABASE=mydb
+export SYNCDB_DRIVER=mysql
 ```
 
 ## Contributing
