@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hoangnguyenba/syncdb/pkg/config"
 	"github.com/hoangnguyenba/syncdb/pkg/db"
@@ -135,10 +137,44 @@ func newImportCommand() *cobra.Command {
 						if val == "NULL" {
 							rowData[col] = nil
 						} else if strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'") {
-							// String value
-							rowData[col] = strings.Trim(val, "'")
+							// String value - remove outer quotes
+							strVal := strings.Trim(val, "'")
+
+							// Try to parse as datetime first
+							if t, err := time.Parse("2006-01-02 15:04:05", strVal); err == nil {
+								rowData[col] = t
+								continue
+							}
+
+							// Check if this might be a JSON string
+							if strings.HasPrefix(strVal, "{") || strings.HasPrefix(strVal, "[") {
+								// Try to parse as JSON
+								var jsonVal interface{}
+								if err := json.Unmarshal([]byte(strVal), &jsonVal); err == nil {
+									rowData[col] = jsonVal
+								} else {
+									// If not valid JSON, use as regular string
+									rowData[col] = strVal
+								}
+							} else {
+								rowData[col] = strVal
+							}
 						} else {
-							// Numeric value
+							// Try to parse as number first
+							if strings.Contains(val, ".") {
+								// Try as float
+								if f, err := strconv.ParseFloat(val, 64); err == nil {
+									rowData[col] = f
+									continue
+								}
+							} else {
+								// Try as integer
+								if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+									rowData[col] = i
+									continue
+								}
+							}
+							// If not a number, use as is
 							rowData[col] = val
 						}
 					}

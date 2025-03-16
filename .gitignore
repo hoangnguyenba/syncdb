@@ -1,2 +1,2 @@
-syncdb
+./syncdb
 .env

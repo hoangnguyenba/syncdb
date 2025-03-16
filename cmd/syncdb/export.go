@@ -166,6 +166,24 @@ func newExportCommand() *cobra.Command {
 									values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
 								case time.Time:
 									values = append(values, fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05")))
+								case map[string]interface{}, []interface{}:
+									// Handle JSON values
+									jsonBytes, err := json.Marshal(v)
+									if err != nil {
+										return fmt.Errorf("failed to marshal JSON value: %v", err)
+									}
+									jsonStr := string(jsonBytes)
+									values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(jsonStr, "'", "''")))
+								case float64:
+									values = append(values, fmt.Sprintf("%f", v))
+								case int64:
+									values = append(values, fmt.Sprintf("%d", v))
+								case bool:
+									if v {
+										values = append(values, "1")
+									} else {
+										values = append(values, "0")
+									}
 								default:
 									values = append(values, fmt.Sprintf("%v", v))
 								}
