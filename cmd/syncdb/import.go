@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hoangnguyenba/syncdb/pkg/config"
 	"github.com/hoangnguyenba/syncdb/pkg/db"
 	"github.com/spf13/cobra"
 )
@@ -15,37 +16,74 @@ func newImportCommand() *cobra.Command {
 		Short: "Import database data",
 		Long:  `Import database data from a file.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Get all flags
-			host, _ := cmd.Flags().GetString("host")
-			port, _ := cmd.Flags().GetInt("port")
-			username, _ := cmd.Flags().GetString("username")
-			password, _ := cmd.Flags().GetString("password")
-			dbName, _ := cmd.Flags().GetString("database")
-			dbDriver, _ := cmd.Flags().GetString("driver")
-			tables, _ := cmd.Flags().GetStringSlice("tables")
-			upsert, _ := cmd.Flags().GetBool("upsert")
-			filePath, _ := cmd.Flags().GetString("file-path")
-			truncate, _ := cmd.Flags().GetBool("truncate")
+			// Load config from environment
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %v", err)
+			}
 
-			// Validate required flags
+			// Get flags, use config as defaults
+			host, _ := cmd.Flags().GetString("host")
+			if host == "localhost" { // default value
+				host = cfg.Import.Host
+			}
+
+			port, _ := cmd.Flags().GetInt("port")
+			if port == 3306 { // default value
+				port = cfg.Import.Port
+			}
+
+			username, _ := cmd.Flags().GetString("username")
+			if username == "" {
+				username = cfg.Import.Username
+			}
+
+			password, _ := cmd.Flags().GetString("password")
+			if password == "" {
+				password = cfg.Import.Password
+			}
+
+			dbName, _ := cmd.Flags().GetString("database")
 			if dbName == "" {
-				return fmt.Errorf("database name is required")
+				dbName = cfg.Import.Database
+			}
+
+			dbDriver, _ := cmd.Flags().GetString("driver")
+			if dbDriver == "mysql" { // default value
+				dbDriver = cfg.Import.Driver
+			}
+
+			tables, _ := cmd.Flags().GetStringSlice("tables")
+			if len(tables) == 0 {
+				tables = cfg.Import.Tables
+			}
+
+			filePath, _ := cmd.Flags().GetString("file-path")
+			if filePath == "" {
+				filePath = cfg.Import.Filepath
+			}
+
+			truncate, _ := cmd.Flags().GetBool("truncate")
+			upsert, _ := cmd.Flags().GetBool("upsert")
+
+			// Validate required values
+			if dbName == "" {
+				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_IMPORT_DATABASE env)")
 			}
 
 			if filePath == "" {
-				return fmt.Errorf("file path is required")
+				return fmt.Errorf("file path is required (set via --file-path flag or SYNCDB_IMPORT_FILEPATH env)")
 			}
 
-			// Read the export file
-			jsonData, err := os.ReadFile(filePath)
+			// Read import file
+			fileData, err := os.ReadFile(filePath)
 			if err != nil {
 				return fmt.Errorf("failed to read file: %v", err)
 			}
 
-			// Parse the JSON data
-			var exportData ExportData
-			if err := json.Unmarshal(jsonData, &exportData); err != nil {
-				return fmt.Errorf("failed to parse JSON: %v", err)
+			var importData ExportData
+			if err := json.Unmarshal(fileData, &importData); err != nil {
+				return fmt.Errorf("failed to parse import file: %v", err)
 			}
 
 			// Initialize database connection
@@ -56,59 +94,43 @@ func newImportCommand() *cobra.Command {
 			defer database.Close()
 
 			// Filter tables if specified
-			importTables := exportData.Metadata.Tables
+			importTables := importData.Metadata.Tables
 			if len(tables) > 0 {
-				// Create a map for quick lookup
-				tableMap := make(map[string]bool)
-				for _, t := range tables {
-					tableMap[t] = true
-				}
-
-				// Filter tables
-				var filtered []string
-				for _, t := range importTables {
-					if tableMap[t] {
-						filtered = append(filtered, t)
-					}
-				}
-				importTables = filtered
-			}
-
-			// Import schema if included
-			if exportData.Schema != nil {
-				fmt.Println("Importing schema is not implemented yet")
+				importTables = tables
 			}
 
 			// Import data for each table
 			for _, table := range importTables {
-				// Get initial row count
-				initialCount, err := db.GetTableRowCount(database, table)
+				// Get current row count
+				currentCount, err := db.GetTableRowCount(database, table)
 				if err != nil {
-					return fmt.Errorf("failed to get initial row count for table %s: %v", table, err)
+					return fmt.Errorf("failed to get row count for table %s: %v", table, err)
 				}
+				fmt.Printf("Table %s: %d rows before import\n", table, currentCount)
 
-				// Truncate table if requested
+				// Truncate if requested
 				if truncate {
 					if err := db.TruncateTable(database, table); err != nil {
 						return fmt.Errorf("failed to truncate table %s: %v", table, err)
 					}
-					fmt.Printf("Truncated table %s\n", table)
 				}
 
 				// Import data
-				data := exportData.Data[table]
+				data, ok := importData.Data[table]
+				if !ok {
+					return fmt.Errorf("table %s not found in import file", table)
+				}
+
 				if err := db.ImportTableData(database, table, data, upsert, dbDriver); err != nil {
-					return fmt.Errorf("failed to import data into table %s: %v", table, err)
+					return fmt.Errorf("failed to import data to table %s: %v", table, err)
 				}
 
 				// Get final row count
 				finalCount, err := db.GetTableRowCount(database, table)
 				if err != nil {
-					return fmt.Errorf("failed to get final row count for table %s: %v", table, err)
+					return fmt.Errorf("failed to get row count for table %s: %v", table, err)
 				}
-
-				fmt.Printf("Table %s: %d rows before import, %d rows after import\n",
-					table, initialCount, finalCount)
+				fmt.Printf("Table %s: %d rows after import\n", table, finalCount)
 			}
 
 			return nil
@@ -123,15 +145,11 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().String("database", "", "Database name")
 	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
 	cmd.Flags().StringSlice("tables", []string{}, "Tables to import (default: all)")
-
-	// Import settings flags
-	cmd.Flags().Bool("upsert", true, "Perform upsert instead of insert")
-	cmd.Flags().Bool("truncate", false, "Truncate tables before import")
 	cmd.Flags().String("file-path", "", "Input file path")
 
-	// Mark required flags
-	cmd.MarkFlagRequired("database")
-	cmd.MarkFlagRequired("file-path")
+	// Import settings flags
+	cmd.Flags().Bool("truncate", false, "Truncate tables before import")
+	cmd.Flags().Bool("upsert", true, "Use upsert instead of insert")
 
 	return cmd
 }

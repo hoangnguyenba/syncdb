@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/hoangnguyenba/syncdb/pkg/config"
 	"github.com/hoangnguyenba/syncdb/pkg/db"
 	"github.com/spf13/cobra"
 )
@@ -26,27 +27,78 @@ func newExportCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Export database data",
-		Long:  `Export database data to a file using various storage options (local, S3, or Google Drive).`,
+		Long:  `Export database data to a file.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Get all flags
-			host, _ := cmd.Flags().GetString("host")
-			port, _ := cmd.Flags().GetInt("port")
-			username, _ := cmd.Flags().GetString("username")
-			password, _ := cmd.Flags().GetString("password")
-			dbName, _ := cmd.Flags().GetString("database")
-			dbDriver, _ := cmd.Flags().GetString("driver")
-			tables, _ := cmd.Flags().GetStringSlice("tables")
-			includeSchema, _ := cmd.Flags().GetBool("include-schema")
-			condition, _ := cmd.Flags().GetString("condition")
-			filePath, _ := cmd.Flags().GetString("file-path")
+			// Load config from environment
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %v", err)
+			}
 
-			// Validate required flags
+			// Get flags, use config as defaults if flags are not explicitly set
+			var host string
+			if cmd.Flags().Changed("host") {
+				host, _ = cmd.Flags().GetString("host")
+			} else {
+				host = cfg.Export.Host
+			}
+
+			var port int
+			if cmd.Flags().Changed("port") {
+				port, _ = cmd.Flags().GetInt("port")
+			} else {
+				port = cfg.Export.Port
+			}
+
+			var username string
+			if cmd.Flags().Changed("username") {
+				username, _ = cmd.Flags().GetString("username")
+			} else {
+				username = cfg.Export.Username
+			}
+
+			var password string
+			if cmd.Flags().Changed("password") {
+				password, _ = cmd.Flags().GetString("password")
+			} else {
+				password = cfg.Export.Password
+			}
+
+			var dbName string
+			if cmd.Flags().Changed("database") {
+				dbName, _ = cmd.Flags().GetString("database")
+			} else {
+				dbName = cfg.Export.Database
+			}
+
+			var dbDriver string
+			if cmd.Flags().Changed("driver") {
+				dbDriver, _ = cmd.Flags().GetString("driver")
+			} else {
+				dbDriver = cfg.Export.Driver
+			}
+
+			var tables []string
+			if cmd.Flags().Changed("tables") {
+				tables, _ = cmd.Flags().GetStringSlice("tables")
+			} else {
+				tables = cfg.Export.Tables
+			}
+
+			var filePath string
+			if cmd.Flags().Changed("file-path") {
+				filePath, _ = cmd.Flags().GetString("file-path")
+			} else {
+				filePath = cfg.Export.Filepath
+			}
+
+			// Validate required values
 			if dbName == "" {
-				return fmt.Errorf("database name is required")
+				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_EXPORT_DATABASE env)")
 			}
 
 			if filePath == "" {
-				return fmt.Errorf("file path is required")
+				return fmt.Errorf("file path is required (set via --file-path flag or SYNCDB_EXPORT_FILEPATH env)")
 			}
 
 			// Initialize database connection
@@ -71,23 +123,10 @@ func newExportCommand() *cobra.Command {
 			exportData.Metadata.ExportedAt = time.Now()
 			exportData.Metadata.DatabaseName = dbName
 			exportData.Metadata.Tables = tables
-			exportData.Metadata.Schema = includeSchema
-
-			// Export schema if requested
-			if includeSchema {
-				exportData.Schema = make(map[string]string)
-				for _, table := range tables {
-					schema, err := db.GetTableSchema(database, table, dbDriver)
-					if err != nil {
-						return fmt.Errorf("failed to get schema for table %s: %v", table, err)
-					}
-					exportData.Schema[table] = schema
-				}
-			}
 
 			// Export data for each table
 			for _, table := range tables {
-				data, err := db.ExportTableData(database, table, condition)
+				data, err := db.ExportTableData(database, table, "")
 				if err != nil {
 					return fmt.Errorf("failed to export data from table %s: %v", table, err)
 				}
@@ -124,15 +163,7 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().String("database", "", "Database name")
 	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
 	cmd.Flags().StringSlice("tables", []string{}, "Tables to export (default: all)")
-
-	// Export settings flags
-	cmd.Flags().Bool("include-schema", false, "Include schema in export")
-	cmd.Flags().String("condition", "", "WHERE condition for export")
 	cmd.Flags().String("file-path", "", "Output file path")
-
-	// Mark required flags
-	cmd.MarkFlagRequired("database")
-	cmd.MarkFlagRequired("file-path")
 
 	return cmd
 }
