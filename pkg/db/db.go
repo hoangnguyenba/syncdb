@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
@@ -169,4 +170,124 @@ func ExportTableData(db *sql.DB, table string, condition string) ([]map[string]i
 	}
 
 	return result, nil
+}
+
+// ImportTableData imports data into the specified table
+func ImportTableData(db *sql.DB, table string, data []map[string]interface{}, upsert bool, driver string) error {
+	if len(data) == 0 {
+		return nil // Nothing to import
+	}
+
+	// Get column names from the first row
+	var columns []string
+	for column := range data[0] {
+		columns = append(columns, column)
+	}
+
+	// Build the base SQL statement
+	var sqlStr string
+	var placeholders []string
+
+	switch driver {
+	case "mysql":
+		// Build INSERT or INSERT ... ON DUPLICATE KEY UPDATE statement for MySQL
+		sqlStr = fmt.Sprintf("INSERT INTO %s (%s) VALUES ",
+			table,
+			buildColumnList(columns, driver))
+
+		// Create placeholders for each row
+		placeholders = make([]string, len(columns))
+		for i := range columns {
+			placeholders[i] = "?"
+		}
+		sqlStr += "(" + strings.Join(placeholders, ", ") + ")"
+
+		if upsert {
+			var updates []string
+			for _, col := range columns {
+				updates = append(updates, fmt.Sprintf("%s = VALUES(%s)", col, col))
+			}
+			sqlStr += " ON DUPLICATE KEY UPDATE " + strings.Join(updates, ", ")
+		}
+
+	case "postgres":
+		// Build INSERT or INSERT ... ON CONFLICT statement for PostgreSQL
+		sqlStr = fmt.Sprintf("INSERT INTO %s (%s) VALUES ",
+			table,
+			buildColumnList(columns, driver))
+
+		// Create placeholders for each row
+		placeholders = make([]string, len(columns))
+		for i := range columns {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+		}
+		sqlStr += "(" + strings.Join(placeholders, ", ") + ")"
+
+		if upsert {
+			sqlStr += " ON CONFLICT ON CONSTRAINT " + table + "_pkey DO UPDATE SET "
+			var updates []string
+			for _, col := range columns {
+				updates = append(updates, fmt.Sprintf("%s = EXCLUDED.%s", col, col))
+			}
+			sqlStr += strings.Join(updates, ", ")
+		}
+
+	default:
+		return fmt.Errorf("unsupported database driver: %s", driver)
+	}
+
+	// Prepare the statement
+	stmt, err := db.Prepare(sqlStr)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %v", err)
+	}
+	defer stmt.Close()
+
+	// Import each row
+	for _, row := range data {
+		// Extract values in the same order as columns
+		values := make([]interface{}, len(columns))
+		for i, col := range columns {
+			values[i] = row[col]
+		}
+
+		// Execute the statement
+		_, err = stmt.Exec(values...)
+		if err != nil {
+			return fmt.Errorf("failed to import row: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// Helper function to build column list based on driver
+func buildColumnList(columns []string, driver string) string {
+	switch driver {
+	case "mysql":
+		return "`" + strings.Join(columns, "`, `") + "`"
+	case "postgres":
+		return "\"" + strings.Join(columns, "\", \"") + "\""
+	default:
+		return strings.Join(columns, ", ")
+	}
+}
+
+// TruncateTable truncates the specified table
+func TruncateTable(db *sql.DB, table string) error {
+	_, err := db.Exec(fmt.Sprintf("TRUNCATE TABLE %s", table))
+	if err != nil {
+		return fmt.Errorf("failed to truncate table: %v", err)
+	}
+	return nil
+}
+
+// GetTableRowCount returns the number of rows in the specified table
+func GetTableRowCount(db *sql.DB, table string) (int, error) {
+	var count int
+	err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get row count: %v", err)
+	}
+	return count, nil
 }
