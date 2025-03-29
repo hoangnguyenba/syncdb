@@ -612,6 +612,9 @@ func newImportCommand() *cobra.Command {
 					return fmt.Errorf("failed to parse metadata file: %v", err)
 				}
 
+				fmt.Printf("Starting import of %d tables into database '%s'\n", len(metadata.Tables), dbName)
+				var totalRecords int
+				
 				// Import table data
 				for i, table := range metadata.Tables {
 					// Skip tables that are completely excluded
@@ -624,6 +627,8 @@ func newImportCommand() *cobra.Command {
 						continue
 					}
 
+					fmt.Printf("Importing table '%s'...", table)
+
 					tableFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table))
 					tableData, err := os.ReadFile(tableFile)
 					if err != nil {
@@ -632,6 +637,7 @@ func newImportCommand() *cobra.Command {
 
 					// Split into individual statements
 					statements := strings.Split(string(tableData), "\n")
+					var recordCount int
 					for _, stmt := range statements {
 						stmt = strings.TrimSpace(stmt)
 						if stmt == "" || !strings.HasPrefix(strings.ToUpper(stmt), "INSERT") {
@@ -641,9 +647,14 @@ func newImportCommand() *cobra.Command {
 						if _, err := database.Exec(stmt); err != nil {
 							return fmt.Errorf("failed to execute statement for table %s: %v", table, err)
 						}
+						recordCount++
 					}
+
+					totalRecords += recordCount
+					fmt.Printf(" %d records\n", recordCount)
 				}
 
+				fmt.Printf("Imported %d tables with a total of %d records\n", len(metadata.Tables), totalRecords)
 				return nil
 			} else if filePath == "" {
 				return fmt.Errorf("either --file-path or --folder-path is required")

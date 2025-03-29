@@ -216,6 +216,8 @@ func newExportCommand() *cobra.Command {
 			exportData.Metadata.DatabaseName = dbName
 			exportData.Metadata.Tables = tables
 
+			fmt.Printf("Starting export of %d tables from database '%s'\n", len(tables), dbName)
+
 			// Write metadata to a separate file (with 0_ prefix)
 			metadataData, err := json.MarshalIndent(exportData.Metadata, "", "  ")
 			if err != nil {
@@ -271,6 +273,7 @@ func newExportCommand() *cobra.Command {
 			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
 
 			// Export data for each table to separate files
+			var totalRecords int
 			for i, table := range tables {
 				// Check if it's a view
 				isView, err := db.IsView(database, table, dbDriver)
@@ -288,13 +291,17 @@ func newExportCommand() *cobra.Command {
 					continue
 				}
 
+				fmt.Printf("Exporting table '%s'...", table)
+
 				data, orderedColumns, err := db.ExportTableData(database, table, "", dbDriver)
 
 				if err != nil {
 					return fmt.Errorf("failed to export data from table %s: %v", table, err)
 				}
 
-				fmt.Printf("orderedColumns %v\n", orderedColumns)
+				recordCount := len(data)
+				totalRecords += recordCount
+				fmt.Printf(" %d records\n", recordCount)
 
 				var outputData []byte
 				switch format {
@@ -362,6 +369,8 @@ func newExportCommand() *cobra.Command {
 					return fmt.Errorf("failed to write table file %s: %v", table, err)
 				}
 			}
+
+			fmt.Printf("Exported %d tables with a total of %d records\n", len(tables), totalRecords)
 
 			// If zip flag is enabled, create a zip file
 			if createZip {
