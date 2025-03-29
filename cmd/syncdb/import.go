@@ -331,8 +331,31 @@ func newImportCommand() *cobra.Command {
 							return err
 						}
 
+						fmt.Println("Looking for metadata file...")
+						// Find the timestamp directory by looking for the metadata file
+						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
+							if err != nil {
+								return err
+							}
+							if !info.IsDir() && strings.HasSuffix(path, "0_metadata.json") {
+								// Get parent directory of metadata file
+								importDir = filepath.Dir(path)
+								return filepath.SkipAll
+							}
+							return nil
+						})
+						if err != nil {
+							return fmt.Errorf("failed to find metadata file: %v", err)
+						}
+
+						if importDir == "" {
+							return fmt.Errorf("no metadata file found in zip file")
+						}
+
+						fmt.Printf("Using directory with metadata: %s\n", importDir)
+
 						// List all files after unzip
-						fmt.Println("\nFiles available after unzip:")
+						fmt.Println("\nFiles available in import directory:")
 						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
 							if err != nil {
 								return err
@@ -361,6 +384,49 @@ func newImportCommand() *cobra.Command {
 						if err := unzipFile(zipFile, importDir); err != nil {
 							return err
 						}
+
+						fmt.Println("Looking for metadata file...")
+						// Find the timestamp directory by looking for the metadata file
+						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
+							if err != nil {
+								return err
+							}
+							if !info.IsDir() && strings.HasSuffix(path, "0_metadata.json") {
+								// Get parent directory of metadata file
+								importDir = filepath.Dir(path)
+								return filepath.SkipAll
+							}
+							return nil
+						})
+						if err != nil {
+							return fmt.Errorf("failed to find metadata file: %v", err)
+						}
+
+						if importDir == "" {
+							return fmt.Errorf("no metadata file found in zip file")
+						}
+
+						fmt.Printf("Using directory with metadata: %s\n", importDir)
+
+						// List all files after unzip
+						fmt.Println("\nFiles available in import directory:")
+						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
+							if err != nil {
+								return err
+							}
+							if !info.IsDir() {
+								relPath, err := filepath.Rel(importDir, path)
+								if err != nil {
+									return err
+								}
+								fmt.Printf("  - %s (%d bytes)\n", relPath, info.Size())
+							}
+							return nil
+						})
+						if err != nil {
+							fmt.Printf("Warning: failed to list unzipped files: %v\n", err)
+						}
+						fmt.Println()
 					}
 				} else {
 					if storageType == "s3" {
