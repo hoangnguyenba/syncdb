@@ -20,6 +20,7 @@ type ExportData struct {
 		DatabaseName string    `json:"database_name"`
 		Tables       []string  `json:"tables"`
 		Schema       bool      `json:"include_schema"`
+		ViewData     bool      `json:"include_view_data"`
 	} `json:"metadata"`
 	Schema map[string]string                   `json:"schema,omitempty"`
 	Data   map[string][]map[string]interface{} `json:"data"`
@@ -185,8 +186,22 @@ func newExportCommand() *cobra.Command {
 				}
 			}
 
+			// Get include-view-data flag
+			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
+
 			// Export data for each table to separate files
 			for i, table := range tables {
+				// Check if it's a view
+				isView, err := db.IsView(database, table, dbDriver)
+				if err != nil {
+					return fmt.Errorf("failed to check if %s is a view: %v", table, err)
+				}
+
+				// Skip data export for views unless include-view-data is true
+				if isView && !includeViewData {
+					continue
+				}
+
 				data, err := db.ExportTableData(database, table, "")
 				if err != nil {
 					return fmt.Errorf("failed to export data from table %s: %v", table, err)
@@ -278,6 +293,9 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().String("format", "sql", "Output format (json, sql)")
 	cmd.Flags().Bool("include-schema", false, "Include database schema in export")
 	cmd.Flags().String("folder-path", "", "Base folder path for export (default: database name)")
+
+	// Add new flag for view data inclusion
+	cmd.Flags().Bool("include-view-data", false, "Include data from views in export")
 
 	return cmd
 }

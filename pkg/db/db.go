@@ -71,30 +71,10 @@ func GetTables(db *sql.DB, dbName string, driver string) ([]string, error) {
 
 // GetTableSchema returns the CREATE TABLE/VIEW statement for the specified table/view
 func GetTableSchema(db *sql.DB, table string, driver string) (string, error) {
-	// First check if it's a view
-	var isView bool
-	switch driver {
-	case "mysql":
-		err := db.QueryRow(`
-			SELECT COUNT(*) 
-			FROM information_schema.views 
-			WHERE table_name = ?
-		`, table).Scan(&isView)
-		if err != nil {
-			return "", fmt.Errorf("failed to check if view exists: %v", err)
-		}
-	case "postgres":
-		err := db.QueryRow(`
-			SELECT COUNT(*) 
-			FROM information_schema.views 
-			WHERE table_name = $1 
-			AND table_schema = 'public'
-		`, table).Scan(&isView)
-		if err != nil {
-			return "", fmt.Errorf("failed to check if view exists: %v", err)
-		}
-	default:
-		return "", fmt.Errorf("unsupported database driver: %s", driver)
+	// Check if it's a view
+	isView, err := IsView(db, table, driver)
+	if err != nil {
+		return "", err
 	}
 
 	if isView {
@@ -387,4 +367,33 @@ func GetTableColumns(db *sql.DB, table string, driver string) ([]string, error) 
 	}
 
 	return columns, nil
+}
+
+// IsView checks if the given table name is actually a view
+func IsView(db *sql.DB, table string, driver string) (bool, error) {
+	var count int
+	switch driver {
+	case "mysql":
+		err := db.QueryRow(`
+			SELECT COUNT(*) 
+			FROM information_schema.views 
+			WHERE table_name = ?
+		`, table).Scan(&count)
+		if err != nil {
+			return false, fmt.Errorf("failed to check if view exists: %v", err)
+		}
+	case "postgres":
+		err := db.QueryRow(`
+			SELECT COUNT(*) 
+			FROM information_schema.views 
+			WHERE table_name = $1 
+			AND table_schema = 'public'
+		`, table).Scan(&count)
+		if err != nil {
+			return false, fmt.Errorf("failed to check if view exists: %v", err)
+		}
+	default:
+		return false, fmt.Errorf("unsupported database driver: %s", driver)
+	}
+	return count > 0, nil
 }
