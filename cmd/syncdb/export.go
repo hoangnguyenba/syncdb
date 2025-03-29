@@ -457,7 +457,7 @@ func newExportCommand() *cobra.Command {
 					}
 					defer file.Close()
 
-					s3Key := filepath.Base(zipFileName)
+					s3Key := filepath.Join(folderPath, filepath.Base(zipFileName))
 					_, err = svc.PutObject(&s3.PutObjectInput{
 						Bucket: aws.String(s3Bucket),
 						Key:    aws.String(s3Key),
@@ -512,12 +512,12 @@ func newExportCommand() *cobra.Command {
 					}
 					defer file.Close()
 
-					// Create S3 key (path relative to exportPath)
+					// Create S3 key (path relative to exportPath, include folder path)
 					relPath, err := filepath.Rel(exportPath, path)
 					if err != nil {
 						return fmt.Errorf("failed to get relative path: %v", err)
 					}
-					s3Key := filepath.Join(timestamp, relPath)
+					s3Key := filepath.Join(folderPath, timestamp, relPath)
 
 					// Upload to S3
 					_, err = svc.PutObject(&s3.PutObjectInput{
