@@ -154,10 +154,63 @@ func GetTableSchema(db *sql.DB, table string, driver string) (string, error) {
 	return schema, nil
 }
 
+// GetNonVirtualColumns returns a list of non-virtual column names for the given table
+func GetNonVirtualColumns(db *sql.DB, table string, driver string) ([]string, error) {
+	var query string
+	switch driver {
+	case "mysql":
+		query = `
+			SELECT COLUMN_NAME 
+			FROM INFORMATION_SCHEMA.COLUMNS 
+			WHERE TABLE_NAME = ? 
+			AND (EXTRA NOT LIKE '%VIRTUAL%' AND EXTRA NOT LIKE '%STORED%')
+			ORDER BY ORDINAL_POSITION
+		`
+	case "postgres":
+		query = `
+			SELECT column_name 
+			FROM information_schema.columns 
+			WHERE table_name = $1 
+			AND table_schema = 'public'
+			AND generation_expression = ''
+			ORDER BY ordinal_position
+		`
+	default:
+		return nil, fmt.Errorf("unsupported database driver: %s", driver)
+	}
+
+	rows, err := db.Query(query, table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query table columns: %v", err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return nil, fmt.Errorf("failed to scan column name: %v", err)
+		}
+		columns = append(columns, column)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating table columns: %v", err)
+	}
+
+	return columns, nil
+}
+
 // ExportTableData exports all data from the specified table
-func ExportTableData(db *sql.DB, table string, condition string) ([]map[string]interface{}, error) {
-	// Get column names
-	query := fmt.Sprintf("SELECT * FROM %s", table)
+func ExportTableData(db *sql.DB, table string, condition string, driver string) ([]map[string]interface{}, error) {
+	// Get non-virtual column names
+	columns, err := GetNonVirtualColumns(db, table, driver)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get non-virtual columns: %v", err)
+	}
+
+	// Build query with specific columns instead of *
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(columns, ", "), table)
 	if condition != "" {
 		query += " WHERE " + condition
 	}
@@ -167,11 +220,6 @@ func ExportTableData(db *sql.DB, table string, condition string) ([]map[string]i
 		return nil, fmt.Errorf("failed to query data: %v", err)
 	}
 	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %v", err)
-	}
 
 	// Prepare result slice
 	var result []map[string]interface{}

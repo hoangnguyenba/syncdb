@@ -202,7 +202,7 @@ func newExportCommand() *cobra.Command {
 					continue
 				}
 
-				data, err := db.ExportTableData(database, table, "")
+				data, err := db.ExportTableData(database, table, "", dbDriver)
 				if err != nil {
 					return fmt.Errorf("failed to export data from table %s: %v", table, err)
 				}
