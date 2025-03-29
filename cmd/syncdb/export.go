@@ -97,10 +97,11 @@ func newExportCommand() *cobra.Command {
 			// Get folder path, default to database name if not provided
 			var folderPath string
 			if cmd.Flags().Changed("folder-path") {
-				folderPath, _ = cmd.Flags().GetString("folder-path")
-			} else {
-				folderPath = dbName
-			}
+			folderPath, _ = cmd.Flags().GetString("folder-path")
+		} else {
+			folderPath = ""
+		}
+				
 
 			// Validate required values
 			if dbName == "" {
