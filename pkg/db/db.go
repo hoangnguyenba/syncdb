@@ -90,7 +90,7 @@ func GetTableSchema(db *sql.DB, table string, driver string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("failed to get view definition: %v", err)
 			}
-			return fmt.Sprintf("CREATE VIEW %s AS %s", table, viewDef), nil
+			return fmt.Sprintf("CREATE VIEW %s AS %s;", table, viewDef), nil
 		case "postgres":
 			err := db.QueryRow(`
 				SELECT view_definition 
@@ -101,7 +101,7 @@ func GetTableSchema(db *sql.DB, table string, driver string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("failed to get view definition: %v", err)
 			}
-			return fmt.Sprintf("CREATE VIEW %s AS %s", table, viewDef), nil
+			return fmt.Sprintf("CREATE VIEW %s AS %s;", table, viewDef), nil
 		}
 	}
 
@@ -143,6 +143,10 @@ func GetTableSchema(db *sql.DB, table string, driver string) (string, error) {
 		err := db.QueryRow(query).Scan(&dummy, &schema)
 		if err != nil {
 			return "", fmt.Errorf("failed to get schema: %v", err)
+		}
+		// Ensure MySQL schema ends with a semicolon
+		if !strings.HasSuffix(schema, ";") {
+			schema += ";"
 		}
 	} else {
 		err := db.QueryRow(query, table).Scan(&schema)
