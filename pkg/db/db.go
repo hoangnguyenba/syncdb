@@ -210,7 +210,27 @@ func ExportTableData(db *sql.DB, table string, condition string, driver string) 
 	}
 
 	// Build query with specific columns instead of *
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(columns, ", "), table)
+	var columnList string
+	switch driver {
+	case "mysql":
+		// For MySQL, escape column names with backticks
+		escapedColumns := make([]string, len(columns))
+		for i, col := range columns {
+			escapedColumns[i] = fmt.Sprintf("`%s`", col)
+		}
+		columnList = strings.Join(escapedColumns, ", ")
+	case "postgres":
+		// For Postgres, escape column names with double quotes
+		escapedColumns := make([]string, len(columns))
+		for i, col := range columns {
+			escapedColumns[i] = fmt.Sprintf(`"%s"`, col)
+		}
+		columnList = strings.Join(escapedColumns, ", ")
+	default:
+		columnList = strings.Join(columns, ", ")
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s", columnList, table)
 	if condition != "" {
 		query += " WHERE " + condition
 	}
