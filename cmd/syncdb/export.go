@@ -139,6 +139,16 @@ func newExportCommand() *cobra.Command {
 			exportData.Metadata.DatabaseName = dbName
 			exportData.Metadata.Tables = tables
 
+			// Write metadata to a separate file (with 0_ prefix)
+			metadataData, err := json.MarshalIndent(exportData.Metadata, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to marshal metadata: %v", err)
+			}
+			metadataFile := filepath.Join(exportPath, "0_metadata.json")
+			if err = os.WriteFile(metadataFile, metadataData, 0644); err != nil {
+				return fmt.Errorf("failed to write metadata file: %v", err)
+			}
+
 			// Get schema if requested
 			includeSchema, _ := cmd.Flags().GetBool("include-schema")
 			if includeSchema {
@@ -156,18 +166,18 @@ func newExportCommand() *cobra.Command {
 				}
 				exportData.Metadata.Schema = true
 
-				// Write schema based on format
+				// Write schema based on format (with 0_ prefix)
 				var schemaData []byte
 				var schemaFile string
 				if format == "sql" {
 					schemaData = []byte(strings.Join(schemaOutput, "\n"))
-					schemaFile = filepath.Join(exportPath, "schema.sql")
+					schemaFile = filepath.Join(exportPath, "0_schema.sql")
 				} else {
 					schemaData, err = json.MarshalIndent(exportData.Schema, "", "  ")
 					if err != nil {
 						return fmt.Errorf("failed to marshal schema: %v", err)
 					}
-					schemaFile = filepath.Join(exportPath, "schema.json")
+					schemaFile = filepath.Join(exportPath, "0_schema.json")
 				}
 
 				if err = os.WriteFile(schemaFile, schemaData, 0644); err != nil {
@@ -176,7 +186,7 @@ func newExportCommand() *cobra.Command {
 			}
 
 			// Export data for each table to separate files
-			for _, table := range tables {
+			for i, table := range tables {
 				data, err := db.ExportTableData(database, table, "")
 				if err != nil {
 					return fmt.Errorf("failed to export data from table %s: %v", table, err)
@@ -245,21 +255,11 @@ func newExportCommand() *cobra.Command {
 					return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", format)
 				}
 
-				// Write table data to file
-				tableFile := filepath.Join(exportPath, fmt.Sprintf("%s.%s", table, format))
+				// Write table data to file with index prefix (starting from 1)
+				tableFile := filepath.Join(exportPath, fmt.Sprintf("%d_%s.%s", i+1, table, format))
 				if err = os.WriteFile(tableFile, outputData, 0644); err != nil {
 					return fmt.Errorf("failed to write table file %s: %v", table, err)
 				}
-			}
-
-			// Write metadata to a separate file
-			metadataData, err := json.MarshalIndent(exportData.Metadata, "", "  ")
-			if err != nil {
-				return fmt.Errorf("failed to marshal metadata: %v", err)
-			}
-			metadataFile := filepath.Join(exportPath, "metadata.json")
-			if err = os.WriteFile(metadataFile, metadataData, 0644); err != nil {
-				return fmt.Errorf("failed to write metadata file: %v", err)
 			}
 
 			fmt.Printf("Successfully exported %d tables to %s\n", len(tables), exportPath)
