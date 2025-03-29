@@ -105,8 +105,11 @@ func newExportCommand() *cobra.Command {
 				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_EXPORT_DATABASE env)")
 			}
 
+			// Set default filepath if not provided
 			if filePath == "" {
-				return fmt.Errorf("file path is required (set via --file-path flag or SYNCDB_EXPORT_FILEPATH env)")
+				now := time.Now()
+				dateTimeSuffix := now.Format("20060102_150405") // Format as YmdHis
+				filePath = fmt.Sprintf("%s_%s.%s", dbName, dateTimeSuffix, format)
 			}
 
 			// Initialize database connection

@@ -1,3 +1,4 @@
 backup/*
 /syncdb
+/backup.json
 .env

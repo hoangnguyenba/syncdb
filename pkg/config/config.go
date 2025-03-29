@@ -59,8 +59,8 @@ func LoadConfig() (*Config, error) {
 	config.Import.Username = getViperString("syncdb_import_username", "")
 	config.Import.Password = getViperString("syncdb_import_password", "")
 	config.Import.Database = getViperString("syncdb_import_database", "")
-	config.Import.Filepath = getViperString("syncdb_import_filepath", "backup.json")
-	config.Import.Format = getViperString("syncdb_import_format", "json")
+	config.Import.Filepath = getViperString("syncdb_import_filepath", "")
+	config.Import.Format = getViperString("syncdb_import_format", "sql")
 
 	// Handle import tables
 	if tables := getViperString("syncdb_import_tables", ""); tables != "" {
@@ -74,8 +74,8 @@ func LoadConfig() (*Config, error) {
 	config.Export.Username = getViperString("syncdb_export_username", "")
 	config.Export.Password = getViperString("syncdb_export_password", "")
 	config.Export.Database = getViperString("syncdb_export_database", "")
-	config.Export.Filepath = getViperString("syncdb_export_filepath", "backup.json")
-	config.Export.Format = getViperString("syncdb_export_format", "json")
+	config.Export.Filepath = getViperString("syncdb_export_filepath", "")
+	config.Export.Format = getViperString("syncdb_export_format", "sql")
 
 	// Handle export tables
 	if tables := getViperString("syncdb_export_tables", ""); tables != "" {
