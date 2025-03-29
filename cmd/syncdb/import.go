@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -54,6 +56,102 @@ func getLatestTimestampDir(basePath string, dbName string) (string, error) {
 	}
 
 	return filepath.Join(basePath, latestDir), nil
+}
+
+func getLatestZipFile(basePath string) (string, error) {
+	// Check if base directory exists
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		return "", fmt.Errorf("base directory not found: %s", basePath)
+	}
+
+	// Get all files in the base directory
+	entries, err := os.ReadDir(basePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read directory: %v", err)
+	}
+
+	var latestTime time.Time
+	var latestZip string
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Check if file is a zip file
+		if !strings.HasSuffix(entry.Name(), ".zip") {
+			continue
+		}
+
+		// Try to parse filename (without .zip) as timestamp
+		timestamp := strings.TrimSuffix(entry.Name(), ".zip")
+		fileTime, err := time.Parse("20060102_150405", timestamp)
+		if err != nil {
+			continue
+		}
+
+		if latestZip == "" || fileTime.After(latestTime) {
+			latestTime = fileTime
+			latestZip = entry.Name()
+		}
+	}
+
+	if latestZip == "" {
+		return "", fmt.Errorf("no valid zip files found in %s", basePath)
+	}
+
+	return filepath.Join(basePath, latestZip), nil
+}
+
+func unzipFile(zipPath string, destPath string) error {
+	// Open the zip file
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("failed to open zip file: %v", err)
+	}
+	defer reader.Close()
+
+	// Create destination directory
+	if err := os.MkdirAll(destPath, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %v", err)
+	}
+
+	// Extract each file
+	for _, file := range reader.File {
+		// Open the file in the zip
+		rc, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("failed to open file in zip: %v", err)
+		}
+
+		// Create the file path
+		path := filepath.Join(destPath, file.Name)
+
+		if file.FileInfo().IsDir() {
+			// Create directory
+			if err := os.MkdirAll(path, 0755); err != nil {
+				rc.Close()
+				return fmt.Errorf("failed to create directory: %v", err)
+			}
+		} else {
+			// Create the file
+			outFile, err := os.Create(path)
+			if err != nil {
+				rc.Close()
+				return fmt.Errorf("failed to create file: %v", err)
+			}
+
+			// Copy the contents
+			_, err = io.Copy(outFile, rc)
+			outFile.Close()
+			rc.Close()
+			if err != nil {
+				return fmt.Errorf("failed to write file: %v", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func newImportCommand() *cobra.Command {
@@ -130,9 +228,33 @@ func newImportCommand() *cobra.Command {
 
 			// Check if folder path is provided
 			if folderPath != "" {
-				latestDir, err := getLatestTimestampDir(folderPath, dbName)
-				if err != nil {
-					return err
+				var importDir string
+				useZip, _ := cmd.Flags().GetBool("zip")
+
+				if useZip {
+					// Find latest zip file
+					zipFile, err := getLatestZipFile(folderPath)
+					if err != nil {
+						return err
+					}
+
+					// Create temporary directory for unzipped files
+					importDir, err = os.MkdirTemp("", "syncdb_import_*")
+					if err != nil {
+						return fmt.Errorf("failed to create temporary directory: %v", err)
+					}
+					defer os.RemoveAll(importDir) // Clean up temp directory when done
+
+					// Unzip the file
+					if err := unzipFile(zipFile, importDir); err != nil {
+						return err
+					}
+				} else {
+					// Get latest timestamp directory
+					importDir, err = getLatestTimestampDir(folderPath, dbName)
+					if err != nil {
+						return err
+					}
 				}
 
 				// Initialize database connection
@@ -184,7 +306,7 @@ func newImportCommand() *cobra.Command {
 
 				// Import schema if requested
 				if includeSchema {
-					schemaPath := filepath.Join(latestDir, "0_schema.sql")
+					schemaPath := filepath.Join(importDir, "0_schema.sql")
 					schemaData, err := os.ReadFile(schemaPath)
 					if err != nil {
 						return fmt.Errorf("failed to read schema file: %v", err)
@@ -211,7 +333,7 @@ func newImportCommand() *cobra.Command {
 				}
 
 				// First read metadata file
-				metadataPath := filepath.Join(latestDir, "0_metadata.json")
+				metadataPath := filepath.Join(importDir, "0_metadata.json")
 				metadataData, err := os.ReadFile(metadataPath)
 				if err != nil {
 					return fmt.Errorf("failed to read metadata file: %v", err)
@@ -241,7 +363,7 @@ func newImportCommand() *cobra.Command {
 						continue
 					}
 
-					tableFile := filepath.Join(latestDir, fmt.Sprintf("%d_%s.sql", i+1, table))
+					tableFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table))
 					tableData, err := os.ReadFile(tableFile)
 					if err != nil {
 						return fmt.Errorf("failed to read table file %s: %v", table, err)
@@ -426,20 +548,17 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().String("password", "", "Database password")
 	cmd.Flags().String("database", "", "Database name")
 	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
-	cmd.Flags().StringSlice("tables", []string{}, "Tables to import (default: all)")
-	cmd.Flags().String("file-path", "", "Input file path")
-	cmd.Flags().String("folder-path", "", "Input folder path")
-	cmd.Flags().String("format", "json", "Input format (json, sql)")
-
-	// Import settings flags
+	cmd.Flags().StringSlice("tables", []string{}, "Tables to import")
+	cmd.Flags().String("file-path", "", "File path to import from")
+	cmd.Flags().String("folder-path", "", "Folder path to import from")
+	cmd.Flags().String("format", "json", "File format (json, sql)")
 	cmd.Flags().Bool("truncate", false, "Truncate tables before import")
-	cmd.Flags().Bool("upsert", true, "Use upsert instead of insert")
-	cmd.Flags().Bool("include-schema", false, "Import schema if available in backup")
-
-	// Add table exclusion flags
-	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude (both schema and data)")
+	cmd.Flags().Bool("upsert", false, "Use upsert instead of insert")
+	cmd.Flags().Bool("include-schema", false, "Include schema in import")
+	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude")
 	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
 	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
+	cmd.Flags().Bool("zip", false, "Import from latest zip file")
 
 	return cmd
 }
