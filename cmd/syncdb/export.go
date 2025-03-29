@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,6 +177,9 @@ func newExportCommand() *cobra.Command {
 			timestamp := time.Now().Format("20060102_150405")
 			exportPath := filepath.Join(folderPath, timestamp)
 
+			// Get zip flag
+			createZip, _ := cmd.Flags().GetBool("zip")
+
 			// Create directory structure
 			if err = os.MkdirAll(exportPath, 0755); err != nil {
 				return fmt.Errorf("failed to create directory structure: %v", err)
@@ -335,6 +340,74 @@ func newExportCommand() *cobra.Command {
 				}
 			}
 
+			// If zip flag is enabled, create a zip file
+			if createZip {
+				zipFileName := filepath.Join(folderPath, timestamp+".zip")
+				zipFile, err := os.Create(zipFileName)
+				if err != nil {
+					return fmt.Errorf("failed to create zip file: %v", err)
+				}
+				defer zipFile.Close()
+
+				zipWriter := zip.NewWriter(zipFile)
+				defer zipWriter.Close()
+
+				// Walk through the export directory and add files to zip
+				err = filepath.Walk(exportPath, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+
+					// Skip directories
+					if info.IsDir() {
+						return nil
+					}
+
+					// Create a new file header
+					relPath, err := filepath.Rel(exportPath, path)
+					if err != nil {
+						return fmt.Errorf("failed to get relative path for %s: %v", path, err)
+					}
+
+					header, err := zip.FileInfoHeader(info)
+					if err != nil {
+						return fmt.Errorf("failed to create zip header for %s: %v", path, err)
+					}
+
+					// Set relative path in zip
+					header.Name = relPath
+
+					// Create writer for this file within zip
+					writer, err := zipWriter.CreateHeader(header)
+					if err != nil {
+						return fmt.Errorf("failed to create zip entry for %s: %v", path, err)
+					}
+
+					// Open and copy the file content
+					file, err := os.Open(path)
+					if err != nil {
+						return fmt.Errorf("failed to open file %s: %v", path, err)
+					}
+					defer file.Close()
+
+					_, err = io.Copy(writer, file)
+					if err != nil {
+						return fmt.Errorf("failed to write file %s to zip: %v", path, err)
+					}
+
+					return nil
+				})
+
+				if err != nil {
+					return fmt.Errorf("failed to create zip archive: %v", err)
+				}
+
+				// Clean up the exported directory after successful zip creation
+				if err := os.RemoveAll(exportPath); err != nil {
+					fmt.Printf("Warning: failed to clean up export directory: %v\n", err)
+				}
+			}
+
 			fmt.Printf("Successfully exported %d tables to %s\n", len(tables), exportPath)
 			return nil
 		},
@@ -359,6 +432,9 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude (both schema and data)")
 	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
 	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
+
+	// Add zip flag
+	cmd.Flags().Bool("zip", false, "Create a zip file of the exported data")
 
 	return cmd
 }
