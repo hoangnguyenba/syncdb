@@ -387,17 +387,16 @@ func newExportCommand() *cobra.Command {
 					}
 
 					// Create a new file header
-					relPath, err := filepath.Rel(exportPath, path)
-					if err != nil {
-						return fmt.Errorf("failed to get relative path for %s: %v", path, err)
-					}
-
 					header, err := zip.FileInfoHeader(info)
 					if err != nil {
 						return fmt.Errorf("failed to create zip header for %s: %v", path, err)
 					}
 
-					// Set relative path in zip
+					// Preserve directory structure by including the timestamp directory
+					relPath, err := filepath.Rel(filepath.Dir(exportPath), path)
+					if err != nil {
+						return fmt.Errorf("failed to get relative path: %v", path, err)
+					}
 					header.Name = relPath
 
 					// Create writer for this file within zip
@@ -497,7 +496,7 @@ func newExportCommand() *cobra.Command {
 					// Create S3 key (path relative to exportPath, include folder path)
 					relPath, err := filepath.Rel(exportPath, path)
 					if err != nil {
-						return fmt.Errorf("failed to get relative path: %v", err)
+						return fmt.Errorf("failed to get relative path: %v", path, err)
 					}
 					s3Key := filepath.Join(folderPath, timestamp, relPath)
 

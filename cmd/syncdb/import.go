@@ -105,6 +105,7 @@ func getLatestZipFile(basePath string) (string, error) {
 }
 
 func unzipFile(zipPath string, destPath string) error {
+	fmt.Printf("Opening zip file: %s\n", zipPath)
 	// Open the zip file
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -112,46 +113,54 @@ func unzipFile(zipPath string, destPath string) error {
 	}
 	defer reader.Close()
 
-	// Create destination directory
-	if err := os.MkdirAll(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %v", err)
-	}
+	fmt.Printf("Found %d files in zip archive\n", len(reader.File))
 
 	// Extract each file
+	extractedCount := 0
 	for _, file := range reader.File {
+		// Get file info
+		fileInfo := file.FileInfo()
+
+		// Skip directories
+		if fileInfo.IsDir() {
+			continue
+		}
+
 		// Open the file in the zip
 		rc, err := file.Open()
 		if err != nil {
 			return fmt.Errorf("failed to open file in zip: %v", err)
 		}
 
-		// Create the file path
+		// Create the file path, preserving timestamp directory structure
 		path := filepath.Join(destPath, file.Name)
 
-		if file.FileInfo().IsDir() {
-			// Create directory
-			if err := os.MkdirAll(path, 0755); err != nil {
-				rc.Close()
-				return fmt.Errorf("failed to create directory: %v", err)
-			}
-		} else {
-			// Create the file
-			outFile, err := os.Create(path)
-			if err != nil {
-				rc.Close()
-				return fmt.Errorf("failed to create file: %v", err)
-			}
-
-			// Copy the contents
-			_, err = io.Copy(outFile, rc)
-			outFile.Close()
+		// Create parent directory if it doesn't exist
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			rc.Close()
-			if err != nil {
-				return fmt.Errorf("failed to write file: %v", err)
-			}
+			return fmt.Errorf("failed to create directory: %v", err)
 		}
+
+		// Create the file
+		outFile, err := os.Create(path)
+		if err != nil {
+			rc.Close()
+			return fmt.Errorf("failed to create file: %v", err)
+		}
+
+		// Copy the contents
+		written, err := io.Copy(outFile, rc)
+		outFile.Close()
+		rc.Close()
+		if err != nil {
+			return fmt.Errorf("failed to write file: %v", err)
+		}
+
+		extractedCount++
+		fmt.Printf("Extracted: %s (%d bytes)\n", file.Name, written)
 	}
 
+	fmt.Printf("Successfully extracted %d files\n", extractedCount)
 	return nil
 }
 
@@ -278,23 +287,69 @@ func newImportCommand() *cobra.Command {
 					defer os.RemoveAll(importDir) // Clean up temp directory when done
 
 					if storageType == "s3" {
-						// Download latest zip from S3
-						zipFileName := fmt.Sprintf("%s.zip", time.Now().Format("20060102_150405"))
-						zipData, err := store.Download(zipFileName)
+						fmt.Printf("Searching for latest zip file in S3 with prefix: %s\n", folderPath)
+						// Find and download latest zip from S3
+						files, err := store.ListObjects(folderPath)
+						if err != nil {
+							return fmt.Errorf("failed to list objects in S3: %v", err)
+						}
+
+						// Find latest zip file
+						var latestZip string
+						for _, file := range files {
+							if strings.HasSuffix(file, ".zip") {
+								if latestZip == "" || file > latestZip {
+									latestZip = file
+								}
+							}
+						}
+
+						if latestZip == "" {
+							return fmt.Errorf("no zip files found in S3 bucket under path: %s", folderPath)
+						}
+
+						fmt.Printf("Found latest zip file: %s\n", latestZip)
+						fmt.Printf("Downloading zip file from S3...\n")
+
+						// Download the zip file
+						zipData, err := store.Download(latestZip)
 						if err != nil {
 							return fmt.Errorf("failed to download zip from S3: %v", err)
 						}
+						fmt.Printf("Successfully downloaded %d bytes from S3\n", len(zipData))
 
 						// Save zip file locally
 						zipPath := filepath.Join(importDir, "backup.zip")
 						if err := os.WriteFile(zipPath, zipData, 0644); err != nil {
 							return fmt.Errorf("failed to save zip file: %v", err)
 						}
+						fmt.Printf("Saved zip file to: %s\n", zipPath)
 
+						fmt.Printf("Unzipping file to: %s\n", importDir)
 						// Unzip the file
 						if err := unzipFile(zipPath, importDir); err != nil {
 							return err
 						}
+
+						// List all files after unzip
+						fmt.Println("\nFiles available after unzip:")
+						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
+							if err != nil {
+								return err
+							}
+							if !info.IsDir() {
+								relPath, err := filepath.Rel(importDir, path)
+								if err != nil {
+									return err
+								}
+								fmt.Printf("  - %s (%d bytes)\n", relPath, info.Size())
+							}
+							return nil
+						})
+						if err != nil {
+							fmt.Printf("Warning: failed to list unzipped files: %v\n", err)
+						}
+						fmt.Println()
 					} else {
 						// Find latest zip file locally
 						zipFile, err := getLatestZipFile(folderPath)
@@ -316,9 +371,39 @@ func newImportCommand() *cobra.Command {
 						}
 						defer os.RemoveAll(importDir)
 
+						// List files in S3 to find latest timestamp directory
+						files, err := store.ListObjects(folderPath)
+						if err != nil {
+							return fmt.Errorf("failed to list objects in S3: %v", err)
+						}
+
+						// Find latest timestamp directory
+						var latestTimestamp string
+						for _, file := range files {
+							// Skip non-SQL and non-JSON files
+							if !strings.HasSuffix(file, ".sql") && !strings.HasSuffix(file, ".json") {
+								continue
+							}
+							
+							// Extract timestamp from file path
+							parts := strings.Split(file, "/")
+							if len(parts) < 2 {
+								continue
+							}
+							timestamp := parts[len(parts)-2]
+							
+							if latestTimestamp == "" || timestamp > latestTimestamp {
+								latestTimestamp = timestamp
+							}
+						}
+
+						if latestTimestamp == "" {
+							return fmt.Errorf("no timestamp directories found in S3")
+						}
+
 						// Download required files from S3
 						if includeSchema {
-							schemaData, err := store.Download("0_schema.sql")
+							schemaData, err := store.Download(fmt.Sprintf("%s/0_schema.sql", latestTimestamp))
 							if err != nil {
 								return fmt.Errorf("failed to download schema from S3: %v", err)
 							}
@@ -328,7 +413,7 @@ func newImportCommand() *cobra.Command {
 						}
 
 						// Download metadata
-						metadataData, err := store.Download("0_metadata.json")
+						metadataData, err := store.Download(fmt.Sprintf("%s/0_metadata.json", latestTimestamp))
 						if err != nil {
 							return fmt.Errorf("failed to download metadata from S3: %v", err)
 						}
@@ -350,7 +435,7 @@ func newImportCommand() *cobra.Command {
 
 						// Download each table file
 						for i, table := range metadata.Tables {
-							tableData, err := store.Download(fmt.Sprintf("%d_%s.sql", i+1, table))
+							tableData, err := store.Download(fmt.Sprintf("%s/%d_%s.sql", latestTimestamp, i+1, table))
 							if err != nil {
 								return fmt.Errorf("failed to download table %s from S3: %v", table, err)
 							}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -15,6 +16,8 @@ import (
 type Storage interface {
 	Upload([]byte, string) error
 	Download(string) ([]byte, error)
+	ListObjects(prefix string) ([]string, error)
+	GetLatestZipFile() (string, error)
 }
 
 type localStorage struct {
@@ -27,6 +30,43 @@ func (l *localStorage) Upload(data []byte, filename string) error {
 
 func (l *localStorage) Download(filename string) ([]byte, error) {
 	return os.ReadFile(filename)
+}
+
+func (l *localStorage) ListObjects(prefix string) ([]string, error) {
+	var files []string
+	entries, err := os.ReadDir(l.path)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			files = append(files, entry.Name())
+		}
+	}
+	return files, nil
+}
+
+func (l *localStorage) GetLatestZipFile() (string, error) {
+	files, err := l.ListObjects("")
+	if err != nil {
+		return "", err
+	}
+
+	var latestZip string
+	for _, file := range files {
+		if len(file) > 4 && file[len(file)-4:] == ".zip" {
+			if latestZip == "" || file > latestZip {
+				latestZip = file
+			}
+		}
+	}
+
+	if latestZip == "" {
+		return "", fmt.Errorf("no zip files found")
+	}
+
+	return latestZip, nil
 }
 
 func NewLocalStorage(path string) Storage {
@@ -86,4 +126,56 @@ func (s *s3Storage) Download(filename string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+func (s *s3Storage) ListObjects(prefix string) ([]string, error) {
+	var files []string
+
+	// Ensure prefix ends with / if not empty
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		prefix = prefix + "/"
+	}
+
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	})
+
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(context.Background())
+		if err != nil {
+			return nil, err
+		}
+
+		for _, obj := range output.Contents {
+			if obj.Key != nil {
+				files = append(files, *obj.Key)
+			}
+		}
+	}
+
+	return files, nil
+}
+
+func (s *s3Storage) GetLatestZipFile() (string, error) {
+	// List all zip files in the bucket
+	files, err := s.ListObjects("")
+	if err != nil {
+		return "", err
+	}
+
+	var latestZip string
+	for _, file := range files {
+		if strings.HasSuffix(file, ".zip") {
+			if latestZip == "" || file > latestZip {
+				latestZip = file
+			}
+		}
+	}
+
+	if latestZip == "" {
+		return "", fmt.Errorf("no zip files found in S3 bucket %s", s.bucket)
+	}
+
+	return latestZip, nil
 }
