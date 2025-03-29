@@ -153,11 +153,18 @@ func newExportCommand() *cobra.Command {
 				// Generate SQL statements
 				var sqlStatements []string
 				for table, rows := range exportData.Data {
+					// Get column names from first row to maintain consistent order
+					var orderedColumns []string
+					if len(rows) > 0 {
+						for col := range rows[0] {
+							orderedColumns = append(orderedColumns, col)
+						}
+					}
+
 					for _, row := range rows {
-						columns := make([]string, 0)
-						values := make([]string, 0)
-						for col, val := range row {
-							columns = append(columns, col)
+						values := make([]string, 0, len(orderedColumns))
+						for _, col := range orderedColumns {
+							val := row[col]
 							if val == nil {
 								values = append(values, "NULL")
 							} else {
@@ -191,7 +198,7 @@ func newExportCommand() *cobra.Command {
 						}
 						stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);",
 							table,
-							strings.Join(columns, ", "),
+							strings.Join(orderedColumns, ", "),
 							strings.Join(values, ", "))
 						sqlStatements = append(sqlStatements, stmt)
 					}
