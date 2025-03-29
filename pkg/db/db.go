@@ -291,3 +291,45 @@ func GetTableRowCount(db *sql.DB, table string) (int, error) {
 	}
 	return count, nil
 }
+
+// GetTableColumns returns an ordered list of column names for the given table
+func GetTableColumns(db *sql.DB, table string, driver string) ([]string, error) {
+	var query string
+	switch driver {
+	case "mysql":
+		query = `
+			SELECT COLUMN_NAME 
+			FROM INFORMATION_SCHEMA.COLUMNS 
+			WHERE TABLE_NAME = ? 
+			ORDER BY ORDINAL_POSITION`
+	case "postgres":
+		query = `
+			SELECT column_name 
+			FROM information_schema.columns 
+			WHERE table_name = $1 
+			ORDER BY ordinal_position`
+	default:
+		return nil, fmt.Errorf("unsupported database driver: %s", driver)
+	}
+
+	rows, err := db.Query(query, table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query table columns: %v", err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return nil, fmt.Errorf("failed to scan column name: %v", err)
+		}
+		columns = append(columns, column)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating table columns: %v", err)
+	}
+
+	return columns, nil
+}

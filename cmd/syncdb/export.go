@@ -153,12 +153,10 @@ func newExportCommand() *cobra.Command {
 				// Generate SQL statements
 				var sqlStatements []string
 				for table, rows := range exportData.Data {
-					// Get column names from first row to maintain consistent order
-					var orderedColumns []string
-					if len(rows) > 0 {
-						for col := range rows[0] {
-							orderedColumns = append(orderedColumns, col)
-						}
+					// Get ordered columns from database schema
+					orderedColumns, err := db.GetTableColumns(database, table, dbDriver)
+					if err != nil {
+						return fmt.Errorf("failed to get column order for table %s: %v", table, err)
 					}
 
 					for _, row := range rows {
