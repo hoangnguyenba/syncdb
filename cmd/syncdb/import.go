@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,6 +16,45 @@ import (
 )
 
 var sqlInsertRegex = regexp.MustCompile(`INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\);`)
+
+func getLatestTimestampDir(basePath string, dbName string) (string, error) {
+	// Check if base directory exists
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		return "", fmt.Errorf("base directory not found: %s", basePath)
+	}
+
+	// Get all subdirectories in the base directory
+	entries, err := os.ReadDir(basePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read directory: %v", err)
+	}
+
+	var latestTime time.Time
+	var latestDir string
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		// Try to parse directory name as timestamp
+		dirTime, err := time.Parse("20060102_150405", entry.Name())
+		if err != nil {
+			continue
+		}
+
+		if latestDir == "" || dirTime.After(latestTime) {
+			latestTime = dirTime
+			latestDir = entry.Name()
+		}
+	}
+
+	if latestDir == "" {
+		return "", fmt.Errorf("no valid timestamp directories found in %s", basePath)
+	}
+
+	return filepath.Join(basePath, latestDir), nil
+}
 
 func newImportCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -69,6 +109,11 @@ func newImportCommand() *cobra.Command {
 				filePath = cfg.Import.Filepath
 			}
 
+			folderPath, _ := cmd.Flags().GetString("folder-path")
+			if folderPath == "" {
+				folderPath = cfg.Import.FolderPath
+			}
+
 			format, _ := cmd.Flags().GetString("format")
 			if format == "json" { // default value
 				format = cfg.Import.Format
@@ -82,11 +127,88 @@ func newImportCommand() *cobra.Command {
 				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_IMPORT_DATABASE env)")
 			}
 
-			if filePath == "" {
-				return fmt.Errorf("file path is required (set via --file-path flag or SYNCDB_IMPORT_FILEPATH env)")
+			// Check if folder path is provided
+			if folderPath != "" {
+				latestDir, err := getLatestTimestampDir(folderPath, dbName)
+				if err != nil {
+					return err
+				}
+
+				// First read metadata file
+				metadataPath := filepath.Join(latestDir, "0_metadata.json")
+				metadataData, err := os.ReadFile(metadataPath)
+				if err != nil {
+					return fmt.Errorf("failed to read metadata file: %v", err)
+				}
+
+				var metadata struct {
+					ExportedAt   time.Time `json:"exported_at"`
+					DatabaseName string    `json:"database_name"`
+					Tables       []string  `json:"tables"`
+					Schema      bool      `json:"include_schema"`
+					ViewData    bool      `json:"include_view_data"`
+				}
+
+				if err := json.Unmarshal(metadataData, &metadata); err != nil {
+					return fmt.Errorf("failed to parse metadata file: %v", err)
+				}
+
+				// Initialize database connection
+				database, err := db.InitDB(dbDriver, host, port, username, password, dbName)
+				if err != nil {
+					return fmt.Errorf("failed to connect to database: %v", err)
+				}
+				defer database.Close()
+
+				// Import schema if included
+				if metadata.Schema {
+					schemaPath := filepath.Join(latestDir, "0_schema.sql")
+					schemaData, err := os.ReadFile(schemaPath)
+					if err != nil {
+						return fmt.Errorf("failed to read schema file: %v", err)
+					}
+
+					// Split schema into individual statements
+					schemaStatements := strings.Split(string(schemaData), ";")
+					for _, stmt := range schemaStatements {
+						stmt = strings.TrimSpace(stmt)
+						if stmt == "" {
+							continue
+						}
+						if _, err := database.Exec(stmt); err != nil {
+							return fmt.Errorf("failed to execute schema statement: %v", err)
+						}
+					}
+				}
+
+				// Import table data
+				for i, table := range metadata.Tables {
+					tableFile := filepath.Join(latestDir, fmt.Sprintf("%d_%s.sql", i+1, table))
+					tableData, err := os.ReadFile(tableFile)
+					if err != nil {
+						return fmt.Errorf("failed to read table file %s: %v", table, err)
+					}
+
+					// Split into individual statements
+					statements := strings.Split(string(tableData), "\n")
+					for _, stmt := range statements {
+						stmt = strings.TrimSpace(stmt)
+						if stmt == "" || !strings.HasPrefix(strings.ToUpper(stmt), "INSERT") {
+							continue
+						}
+
+						if _, err := database.Exec(stmt); err != nil {
+							return fmt.Errorf("failed to execute statement for table %s: %v", table, err)
+						}
+					}
+				}
+
+				return nil
+			} else if filePath == "" {
+				return fmt.Errorf("either --file-path or --folder-path is required")
 			}
 
-			// Read import file
+			// If using file-path, continue with existing JSON/SQL file import logic
 			fileData, err := os.ReadFile(filePath)
 			if err != nil {
 				return fmt.Errorf("failed to read file: %v", err)
@@ -248,6 +370,7 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
 	cmd.Flags().StringSlice("tables", []string{}, "Tables to import (default: all)")
 	cmd.Flags().String("file-path", "", "Input file path")
+	cmd.Flags().String("folder-path", "", "Input folder path")
 	cmd.Flags().String("format", "json", "Input format (json, sql)")
 
 	// Import settings flags

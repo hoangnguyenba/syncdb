@@ -97,11 +97,10 @@ func newExportCommand() *cobra.Command {
 			// Get folder path, default to database name if not provided
 			var folderPath string
 			if cmd.Flags().Changed("folder-path") {
-			folderPath, _ = cmd.Flags().GetString("folder-path")
-		} else {
-			folderPath = ""
-		}
-				
+				folderPath, _ = cmd.Flags().GetString("folder-path")
+			} else {
+				folderPath = ""
+			}
 
 			// Validate required values
 			if dbName == "" {
@@ -125,7 +124,7 @@ func newExportCommand() *cobra.Command {
 
 			// Create timestamp for folder
 			timestamp := time.Now().Format("20060102_150405")
-			exportPath := filepath.Join(folderPath, dbName, timestamp)
+			exportPath := filepath.Join(folderPath, timestamp)
 
 			// Create directory structure
 			if err = os.MkdirAll(exportPath, 0755); err != nil {

@@ -9,15 +9,16 @@ import (
 
 type Config struct {
 	Import struct {
-		Driver   string
-		Host     string
-		Port     int
-		Username string
-		Password string
-		Database string
-		Tables   []string
-		Filepath string
-		Format   string
+		Driver     string
+		Host       string
+		Port       int
+		Username   string
+		Password   string
+		Database   string
+		Tables     []string
+		Filepath   string
+		Format     string
+		FolderPath string
 	}
 	Export struct {
 		Driver     string
@@ -62,6 +63,7 @@ func LoadConfig() (*Config, error) {
 	config.Import.Database = getViperString("syncdb_import_database", "")
 	config.Import.Filepath = getViperString("syncdb_import_filepath", "")
 	config.Import.Format = getViperString("syncdb_import_format", "sql")
+	config.Import.FolderPath = getViperString("syncdb_import_folder_path", "")
 
 	// Handle import tables
 	if tables := getViperString("syncdb_import_tables", ""); tables != "" {

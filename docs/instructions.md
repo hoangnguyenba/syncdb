@@ -30,6 +30,75 @@ This project is a Golang-based CLI tool for syncing databases through export and
 - **S3:** Bucket name, region, and credentials.
 - **Google Drive:** Credentials and folder ID.
 
+## Import Configuration
+
+The import configuration can be set using environment variables or command-line flags:
+
+```bash
+# Import configuration
+SYNCDB_IMPORT_DRIVER=mysql
+SYNCDB_IMPORT_HOST=localhost
+SYNCDB_IMPORT_PORT=3306
+SYNCDB_IMPORT_USERNAME=root
+SYNCDB_IMPORT_PASSWORD=example
+SYNCDB_IMPORT_DATABASE=commercedb
+SYNCDB_IMPORT_TABLES=sphm_batch,sphm_payment_gateway_config
+SYNCDB_IMPORT_FILEPATH=backup.json
+SYNCDB_IMPORT_FOLDER_PATH=backup
+SYNCDB_IMPORT_FORMAT=json
+```
+
+## Export Configuration
+
+The export configuration can be set using environment variables or command-line flags:
+
+```bash
+# Export configuration
+SYNCDB_EXPORT_DRIVER=mysql
+SYNCDB_EXPORT_HOST=localhost
+SYNCDB_EXPORT_PORT=3306
+SYNCDB_EXPORT_USERNAME=root
+SYNCDB_EXPORT_PASSWORD=example
+SYNCDB_EXPORT_DATABASE=commercedb
+SYNCDB_EXPORT_TABLES=sphm_batch,sphm_payment_gateway_config
+SYNCDB_EXPORT_FILEPATH=backup.json
+SYNCDB_EXPORT_FOLDER_PATH=backup
+SYNCDB_EXPORT_FORMAT=json
+```
+
+## Usage Examples
+
+### Export Data
+
+Export data with schema to a timestamped folder:
+```bash
+./syncdb export --include-schema --folder-path backup
+```
+
+This will create a directory structure like:
+```
+backup/
+  └── commercedb/              # Database name
+      ├── 20250329_150405/    # Timestamp (YYYYMMDD_HHMMSS)
+      │   └── backup.json
+      └── 20250328_103000/
+          └── backup.json
+```
+
+### Import Data
+
+Import from a specific file:
+```bash
+./syncdb import --file-path backup.json
+```
+
+Import from the latest backup in a folder:
+```bash
+./syncdb import --folder-path backup --database commercedb
+```
+
+This will automatically find and use the most recent backup from the timestamped subdirectories under the database folder. Note that when using `--folder-path`, you must specify the database name either via `--database` flag or `SYNCDB_IMPORT_DATABASE` environment variable.
+
 ## Project Structure
 - **cmd/**: Entry point for the CLI application.
 - **pkg/config/**: Configuration management (loading .env and parsing CLI flags).
