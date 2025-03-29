@@ -202,10 +202,12 @@ func newExportCommand() *cobra.Command {
 				}
 
 				data, orderedColumns, err := db.ExportTableData(database, table, "", dbDriver)
-				
+
 				if err != nil {
 					return fmt.Errorf("failed to export data from table %s: %v", table, err)
 				}
+
+				fmt.Printf("orderedColumns %v\n", orderedColumns)
 
 				var outputData []byte
 				switch format {
@@ -221,19 +223,9 @@ func newExportCommand() *cobra.Command {
 						break
 					}
 
-					// Deduplicate columns while maintaining order
-					dedupedColumns := make([]string, 0, len(orderedColumns))
-					seen := make(map[string]bool)
-					for _, col := range orderedColumns {
-						if !seen[col] {
-							dedupedColumns = append(dedupedColumns, col)
-							seen[col] = true
-						}
-					}
-
 					for _, row := range data {
-						values := make([]string, 0, len(dedupedColumns))
-						for _, col := range dedupedColumns {
+						values := make([]string, 0, len(orderedColumns))
+						for _, col := range orderedColumns {
 							val := row[col] // Use the escaped column name directly since that's what we store in the map
 							if val == nil {
 								values = append(values, "NULL")
@@ -268,7 +260,7 @@ func newExportCommand() *cobra.Command {
 
 						stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);",
 							table,
-							strings.Join(dedupedColumns, ", "),
+							strings.Join(orderedColumns, ", "),
 							strings.Join(values, ", "))
 						sqlStatements = append(sqlStatements, stmt)
 					}

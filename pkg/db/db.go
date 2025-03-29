@@ -167,6 +167,7 @@ func GetNonVirtualColumns(db *sql.DB, table string, driver string) ([]string, er
 			SELECT COLUMN_NAME 
 			FROM INFORMATION_SCHEMA.COLUMNS 
 			WHERE TABLE_NAME = ? 
+			AND TABLE_SCHEMA = DATABASE()
 			AND (EXTRA NOT LIKE '%VIRTUAL%' AND EXTRA NOT LIKE '%STORED%')
 			ORDER BY ORDINAL_POSITION
 		`
@@ -214,7 +215,6 @@ func ExportTableData(db *sql.DB, table string, condition string, driver string) 
 	}
 
 	// Build query with specific columns instead of *
-	var columnList string
 	var escapedColumns []string
 	switch driver {
 	case "mysql":
@@ -223,20 +223,18 @@ func ExportTableData(db *sql.DB, table string, condition string, driver string) 
 		for i, col := range columns {
 			escapedColumns[i] = fmt.Sprintf("`%s`", col)
 		}
-		columnList = strings.Join(escapedColumns, ", ")
 	case "postgres":
 		// For Postgres, escape column names with double quotes
 		escapedColumns = make([]string, len(columns))
 		for i, col := range columns {
 			escapedColumns[i] = fmt.Sprintf(`"%s"`, col)
 		}
-		columnList = strings.Join(escapedColumns, ", ")
 	default:
 		escapedColumns = columns
-		columnList = strings.Join(columns, ", ")
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM %s", columnList, table)
+	// Build the query using the escaped columns
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(escapedColumns, ", "), table)
 	if condition != "" {
 		query += " WHERE " + condition
 	}
