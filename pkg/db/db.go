@@ -69,8 +69,63 @@ func GetTables(db *sql.DB, dbName string, driver string) ([]string, error) {
 	return tables, nil
 }
 
-// GetTableSchema returns the CREATE TABLE statement for the specified table
+// GetTableSchema returns the CREATE TABLE/VIEW statement for the specified table/view
 func GetTableSchema(db *sql.DB, table string, driver string) (string, error) {
+	// First check if it's a view
+	var isView bool
+	switch driver {
+	case "mysql":
+		err := db.QueryRow(`
+			SELECT COUNT(*) 
+			FROM information_schema.views 
+			WHERE table_name = ?
+		`, table).Scan(&isView)
+		if err != nil {
+			return "", fmt.Errorf("failed to check if view exists: %v", err)
+		}
+	case "postgres":
+		err := db.QueryRow(`
+			SELECT COUNT(*) 
+			FROM information_schema.views 
+			WHERE table_name = $1 
+			AND table_schema = 'public'
+		`, table).Scan(&isView)
+		if err != nil {
+			return "", fmt.Errorf("failed to check if view exists: %v", err)
+		}
+	default:
+		return "", fmt.Errorf("unsupported database driver: %s", driver)
+	}
+
+	if isView {
+		// Get view definition
+		var viewDef string
+		switch driver {
+		case "mysql":
+			err := db.QueryRow(`
+				SELECT VIEW_DEFINITION 
+				FROM information_schema.views 
+				WHERE table_name = ?
+			`, table).Scan(&viewDef)
+			if err != nil {
+				return "", fmt.Errorf("failed to get view definition: %v", err)
+			}
+			return fmt.Sprintf("CREATE VIEW %s AS %s", table, viewDef), nil
+		case "postgres":
+			err := db.QueryRow(`
+				SELECT view_definition 
+				FROM information_schema.views 
+				WHERE table_name = $1 
+				AND table_schema = 'public'
+			`, table).Scan(&viewDef)
+			if err != nil {
+				return "", fmt.Errorf("failed to get view definition: %v", err)
+			}
+			return fmt.Sprintf("CREATE VIEW %s AS %s", table, viewDef), nil
+		}
+	}
+
+	// If not a view, get table schema
 	var query string
 	switch driver {
 	case "mysql":
