@@ -142,6 +142,46 @@ func newImportCommand() *cobra.Command {
 				}
 				defer database.Close()
 
+				// Handle table exclusions
+				var excludeTables []string
+				var excludeTableSchema []string
+				var excludeTableData []string
+
+				if cmd.Flags().Changed("exclude-table") {
+					excludeTables, _ = cmd.Flags().GetStringSlice("exclude-table")
+				} else {
+					excludeTables = cfg.Import.ExcludeTable
+				}
+
+				if cmd.Flags().Changed("exclude-table-schema") {
+					excludeTableSchema, _ = cmd.Flags().GetStringSlice("exclude-table-schema")
+				} else {
+					excludeTableSchema = cfg.Import.ExcludeTableSchema
+				}
+
+				if cmd.Flags().Changed("exclude-table-data") {
+					excludeTableData, _ = cmd.Flags().GetStringSlice("exclude-table-data")
+				} else {
+					excludeTableData = cfg.Import.ExcludeTableData
+				}
+
+				// Create a map for faster lookup
+				excludeTableMap := make(map[string]bool)
+				excludeSchemaMap := make(map[string]bool)
+				excludeDataMap := make(map[string]bool)
+
+				for _, t := range excludeTables {
+					excludeTableMap[t] = true
+					excludeSchemaMap[t] = true
+					excludeDataMap[t] = true
+				}
+				for _, t := range excludeTableSchema {
+					excludeSchemaMap[t] = true
+				}
+				for _, t := range excludeTableData {
+					excludeDataMap[t] = true
+				}
+
 				// Import schema if requested
 				if includeSchema {
 					schemaPath := filepath.Join(latestDir, "0_schema.sql")
@@ -157,6 +197,13 @@ func newImportCommand() *cobra.Command {
 						if stmt == "" {
 							continue
 						}
+
+						// Skip schema for excluded tables
+						tableName := extractTableNameFromSchema(stmt)
+						if tableName != "" && excludeSchemaMap[tableName] {
+							continue
+						}
+
 						if _, err := database.Exec(stmt); err != nil {
 							return fmt.Errorf("failed to execute schema statement: %v", err)
 						}
@@ -184,6 +231,16 @@ func newImportCommand() *cobra.Command {
 
 				// Import table data
 				for i, table := range metadata.Tables {
+					// Skip tables that are completely excluded
+					if excludeTableMap[table] {
+						continue
+					}
+
+					// Skip tables that are excluded from data import
+					if excludeDataMap[table] {
+						continue
+					}
+
 					tableFile := filepath.Join(latestDir, fmt.Sprintf("%d_%s.sql", i+1, table))
 					tableData, err := os.ReadFile(tableFile)
 					if err != nil {
@@ -379,5 +436,29 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().Bool("upsert", true, "Use upsert instead of insert")
 	cmd.Flags().Bool("include-schema", false, "Import schema if available in backup")
 
+	// Add table exclusion flags
+	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude (both schema and data)")
+	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
+	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
+
 	return cmd
+}
+
+// Helper function to extract table name from schema statement
+func extractTableNameFromSchema(stmt string) string {
+	// Common patterns for table creation and alteration
+	createTableRegex := regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[` + "`" + `]?(\w+)[` + "`" + `]?`)
+	alterTableRegex := regexp.MustCompile(`(?i)ALTER\s+TABLE\s+[` + "`" + `]?(\w+)[` + "`" + `]?`)
+
+	// Try to match CREATE TABLE
+	if matches := createTableRegex.FindStringSubmatch(stmt); len(matches) > 1 {
+		return matches[1]
+	}
+
+	// Try to match ALTER TABLE
+	if matches := alterTableRegex.FindStringSubmatch(stmt); len(matches) > 1 {
+		return matches[1]
+	}
+
+	return ""
 }
