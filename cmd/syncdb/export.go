@@ -135,6 +135,20 @@ func newExportCommand() *cobra.Command {
 			exportData.Metadata.DatabaseName = dbName
 			exportData.Metadata.Tables = tables
 
+			// Get schema if requested
+			includeSchema, _ := cmd.Flags().GetBool("include-schema")
+			if includeSchema {
+				exportData.Schema = make(map[string]string)
+				for _, table := range tables {
+					schema, err := db.GetTableSchema(database, table, dbDriver)
+					if err != nil {
+						return fmt.Errorf("failed to get schema for table %s: %v", table, err)
+					}
+					exportData.Schema[table] = schema
+				}
+				exportData.Metadata.Schema = true
+			}
+
 			// Export data for each table
 			for _, table := range tables {
 				data, err := db.ExportTableData(database, table, "")
@@ -155,7 +169,18 @@ func newExportCommand() *cobra.Command {
 			case "sql":
 				// Generate SQL statements
 				var sqlStatements []string
+
+				// Add schema statements if requested
+				if includeSchema {
+					for table, schema := range exportData.Schema {
+						sqlStatements = append(sqlStatements, fmt.Sprintf("-- Table structure for %s\n%s\n", table, schema))
+					}
+				}
+
 				for table, rows := range exportData.Data {
+					// Add a separator comment before data inserts
+					sqlStatements = append(sqlStatements, fmt.Sprintf("\n-- Data for table %s\n", table))
+
 					// Get ordered columns from database schema
 					orderedColumns, err := db.GetTableColumns(database, table, dbDriver)
 					if err != nil {
@@ -235,6 +260,7 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().StringSlice("tables", []string{}, "Tables to export (default: all)")
 	cmd.Flags().String("file-path", "", "Output file path")
 	cmd.Flags().String("format", "json", "Output format (json, sql)")
+	cmd.Flags().Bool("include-schema", false, "Include database schema in export")
 
 	return cmd
 }
