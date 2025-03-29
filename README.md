@@ -88,14 +88,13 @@ syncdb export \
 The export command will create a folder structure like this:
 ```
 <folder-path>/
-└── <database>/
-    └── <timestamp>/
-        ├── 0_metadata.json
-        ├── 0_schema.sql (if --include-schema is used)
-        ├── 1_users.sql
-        ├── 2_products.sql
-        ├── 3_orders.sql
-        └── ...
+└── <timestamp>/
+      ├── 0_metadata.json
+      ├── 0_schema.sql (if --include-schema is used)
+      ├── 1_users.sql
+      ├── 2_products.sql
+      ├── 3_orders.sql
+      └── ...
 ```
 
 ### Import Data
