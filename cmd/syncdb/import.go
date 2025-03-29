@@ -14,6 +14,7 @@ import (
 
 	"github.com/hoangnguyenba/syncdb/pkg/config"
 	"github.com/hoangnguyenba/syncdb/pkg/db"
+	"github.com/hoangnguyenba/syncdb/pkg/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -221,6 +222,43 @@ func newImportCommand() *cobra.Command {
 			upsert, _ := cmd.Flags().GetBool("upsert")
 			includeSchema, _ := cmd.Flags().GetBool("include-schema")
 
+			// Get storage flags
+			storageType, _ := cmd.Flags().GetString("storage")
+			if storageType == "" {
+				storageType = cfg.Import.Storage
+			}
+
+			// Initialize storage
+			var store storage.Storage
+			switch storageType {
+			case "local":
+				store = storage.NewLocalStorage(folderPath)
+			case "s3":
+				s3Bucket, _ := cmd.Flags().GetString("s3-bucket")
+				if s3Bucket == "" {
+					s3Bucket = cfg.Import.S3Bucket
+				}
+
+				s3Region, _ := cmd.Flags().GetString("s3-region")
+				if s3Region == "" {
+					s3Region = cfg.Import.S3Region
+				}
+
+				if s3Bucket == "" {
+					return fmt.Errorf("s3-bucket is required when storage is set to s3")
+				}
+				if s3Region == "" {
+					return fmt.Errorf("s3-region is required when storage is set to s3")
+				}
+
+				store = storage.NewS3Storage(s3Bucket, s3Region)
+				if store == nil {
+					return fmt.Errorf("failed to initialize S3 storage. Please ensure AWS credentials are set in environment")
+				}
+			default:
+				return fmt.Errorf("unsupported storage type: %s", storageType)
+			}
+
 			// Validate required values
 			if dbName == "" {
 				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_IMPORT_DATABASE env)")
@@ -232,28 +270,100 @@ func newImportCommand() *cobra.Command {
 				useZip, _ := cmd.Flags().GetBool("zip")
 
 				if useZip {
-					// Find latest zip file
-					zipFile, err := getLatestZipFile(folderPath)
-					if err != nil {
-						return err
-					}
-
-					// Create temporary directory for unzipped files
+					// Create temporary directory for files
 					importDir, err = os.MkdirTemp("", "syncdb_import_*")
 					if err != nil {
 						return fmt.Errorf("failed to create temporary directory: %v", err)
 					}
 					defer os.RemoveAll(importDir) // Clean up temp directory when done
 
-					// Unzip the file
-					if err := unzipFile(zipFile, importDir); err != nil {
-						return err
+					if storageType == "s3" {
+						// Download latest zip from S3
+						zipFileName := fmt.Sprintf("%s.zip", time.Now().Format("20060102_150405"))
+						zipData, err := store.Download(zipFileName)
+						if err != nil {
+							return fmt.Errorf("failed to download zip from S3: %v", err)
+						}
+
+						// Save zip file locally
+						zipPath := filepath.Join(importDir, "backup.zip")
+						if err := os.WriteFile(zipPath, zipData, 0644); err != nil {
+							return fmt.Errorf("failed to save zip file: %v", err)
+						}
+
+						// Unzip the file
+						if err := unzipFile(zipPath, importDir); err != nil {
+							return err
+						}
+					} else {
+						// Find latest zip file locally
+						zipFile, err := getLatestZipFile(folderPath)
+						if err != nil {
+							return err
+						}
+
+						// Unzip the file
+						if err := unzipFile(zipFile, importDir); err != nil {
+							return err
+						}
 					}
 				} else {
-					// Get latest timestamp directory
-					importDir, err = getLatestTimestampDir(folderPath, dbName)
-					if err != nil {
-						return err
+					if storageType == "s3" {
+						// Create temporary directory for files
+						importDir, err = os.MkdirTemp("", "syncdb_import_*")
+						if err != nil {
+							return fmt.Errorf("failed to create temporary directory: %v", err)
+						}
+						defer os.RemoveAll(importDir)
+
+						// Download required files from S3
+						if includeSchema {
+							schemaData, err := store.Download("0_schema.sql")
+							if err != nil {
+								return fmt.Errorf("failed to download schema from S3: %v", err)
+							}
+							if err := os.WriteFile(filepath.Join(importDir, "0_schema.sql"), schemaData, 0644); err != nil {
+								return fmt.Errorf("failed to save schema file: %v", err)
+							}
+						}
+
+						// Download metadata
+						metadataData, err := store.Download("0_metadata.json")
+						if err != nil {
+							return fmt.Errorf("failed to download metadata from S3: %v", err)
+						}
+						if err := os.WriteFile(filepath.Join(importDir, "0_metadata.json"), metadataData, 0644); err != nil {
+							return fmt.Errorf("failed to save metadata file: %v", err)
+						}
+
+						// Read metadata to get table list
+						var metadata struct {
+							ExportedAt   time.Time `json:"exported_at"`
+							DatabaseName string    `json:"database_name"`
+							Tables       []string  `json:"tables"`
+							Schema      bool      `json:"include_schema"`
+							ViewData    bool      `json:"include_view_data"`
+						}
+						if err := json.Unmarshal(metadataData, &metadata); err != nil {
+							return fmt.Errorf("failed to parse metadata file: %v", err)
+						}
+
+						// Download each table file
+						for i, table := range metadata.Tables {
+							tableData, err := store.Download(fmt.Sprintf("%d_%s.sql", i+1, table))
+							if err != nil {
+								return fmt.Errorf("failed to download table %s from S3: %v", table, err)
+							}
+							if err := os.WriteFile(filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table)), tableData, 0644); err != nil {
+								return fmt.Errorf("failed to save table file: %v", err)
+							}
+						}
+					} else {
+						// Get latest timestamp directory locally
+						importDir, err = getLatestTimestampDir(folderPath, dbName)
+						if err != nil {
+							return err
+						}
 					}
 				}
 
@@ -559,6 +669,9 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
 	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
 	cmd.Flags().Bool("zip", false, "Import from latest zip file")
+	cmd.Flags().String("storage", "local", "Storage type (local, s3)")
+	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
+	cmd.Flags().String("s3-region", "", "S3 region")
 
 	return cmd
 }

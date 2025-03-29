@@ -10,11 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/hoangnguyenba/syncdb/pkg/config"
 	"github.com/hoangnguyenba/syncdb/pkg/db"
+	"github.com/hoangnguyenba/syncdb/pkg/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -108,11 +106,11 @@ func newExportCommand() *cobra.Command {
 			}
 
 			// Get storage options
-			var storage string
+			var storageType string
 			if cmd.Flags().Changed("storage") {
-				storage, _ = cmd.Flags().GetString("storage")
+				storageType, _ = cmd.Flags().GetString("storage")
 			} else {
-				storage = cfg.Export.Storage
+				storageType = cfg.Export.Storage
 			}
 
 			var s3Bucket string
@@ -431,7 +429,7 @@ func newExportCommand() *cobra.Command {
 				zipWriter.Close()
 
 				// If storage is s3, upload to S3
-				if storage == "s3" {
+				if storageType == "s3" {
 					if s3Bucket == "" {
 						return fmt.Errorf("s3-bucket is required when storage is set to s3")
 					}
@@ -439,42 +437,31 @@ func newExportCommand() *cobra.Command {
 						return fmt.Errorf("s3-region is required when storage is set to s3")
 					}
 
-					// Create AWS session
-					sess, err := session.NewSession(&aws.Config{
-						Region: aws.String(s3Region),
-					})
-					if err != nil {
-						return fmt.Errorf("failed to create AWS session: %v", err)
+					// Initialize S3 storage
+					s3Store := storage.NewS3Storage(s3Bucket, s3Region)
+					if s3Store == nil {
+						return fmt.Errorf("failed to initialize S3 storage. Please ensure AWS credentials are set in environment")
 					}
-
-					// Create S3 service client
-					svc := s3.New(sess)
 
 					// Upload zip file to S3
-					file, err := os.Open(zipFileName)
+					zipData, err := os.ReadFile(zipFileName)
 					if err != nil {
-						return fmt.Errorf("failed to open zip file for S3 upload: %v", err)
+						return fmt.Errorf("failed to read zip file for S3 upload: %v", err)
 					}
-					defer file.Close()
 
 					s3Key := filepath.Join(folderPath, filepath.Base(zipFileName))
-					_, err = svc.PutObject(&s3.PutObjectInput{
-						Bucket: aws.String(s3Bucket),
-						Key:    aws.String(s3Key),
-						Body:   file,
-					})
-					if err != nil {
+					if err := s3Store.Upload(zipData, s3Key); err != nil {
 						return fmt.Errorf("failed to upload zip file to S3: %v", err)
 					}
 
 					fmt.Printf("Uploaded %s to s3://%s/%s\n", zipFileName, s3Bucket, s3Key)
-				}
 
-				// Clean up the exported directory after successful zip creation
-				if err := os.RemoveAll(exportPath); err != nil {
-					fmt.Printf("Warning: failed to clean up export directory: %v\n", err)
+					// Clean up the exported directory after successful zip creation
+					if err := os.RemoveAll(exportPath); err != nil {
+						fmt.Printf("Warning: failed to clean up export directory: %v\n", err)
+					}
 				}
-			} else if storage == "s3" {
+			} else if storageType == "s3" {
 				// If not zipping but using S3 storage, upload individual files
 				if s3Bucket == "" {
 					return fmt.Errorf("s3-bucket is required when storage is set to s3")
@@ -483,16 +470,11 @@ func newExportCommand() *cobra.Command {
 					return fmt.Errorf("s3-region is required when storage is set to s3")
 				}
 
-				// Create AWS session
-				sess, err := session.NewSession(&aws.Config{
-					Region: aws.String(s3Region),
-				})
-				if err != nil {
-					return fmt.Errorf("failed to create AWS session: %v", err)
+				// Initialize S3 storage
+				s3Store := storage.NewS3Storage(s3Bucket, s3Region)
+				if s3Store == nil {
+					return fmt.Errorf("failed to initialize S3 storage. Please ensure AWS credentials are set in environment")
 				}
-
-				// Create S3 service client
-				svc := s3.New(sess)
 
 				// Upload files to S3
 				err = filepath.Walk(exportPath, func(path string, info os.FileInfo, err error) error {
@@ -520,12 +502,12 @@ func newExportCommand() *cobra.Command {
 					s3Key := filepath.Join(folderPath, timestamp, relPath)
 
 					// Upload to S3
-					_, err = svc.PutObject(&s3.PutObjectInput{
-						Bucket: aws.String(s3Bucket),
-						Key:    aws.String(s3Key),
-						Body:   file,
-					})
+					fileData, err := io.ReadAll(file)
 					if err != nil {
+						return fmt.Errorf("failed to read file %s: %v", path, err)
+					}
+
+					if err := s3Store.Upload(fileData, s3Key); err != nil {
 						return fmt.Errorf("failed to upload file %s to S3: %v", path, err)
 					}
 

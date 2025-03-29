@@ -1,11 +1,15 @@
 package storage
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"io"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"gocloud.dev/gcloudv4/google/cloud/storage"
 )
 
 type Storage interface {
@@ -29,19 +33,20 @@ func NewLocalStorage(path string) Storage {
 	return &localStorage{path: path}
 }
 
-func NewS3Storage(bucket, region, accessKey, secretKey string) Storage {
-	cfg := &aws.Config{
-		Region:          region,
-		Credentials:     credentials.NewStaticCredentials(accessKey, secretKey, ""),
-		HTTPClient:      nil,
-		Logger:          nil,
-		Mutex:           nil,
-		TokenSource:     nil,
-		APIVersion:      "latest",
-		SignedURLEnabled: true,
+func NewS3Storage(bucket, region string) Storage {
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion(region),
+	)
+	if err != nil {
+		fmt.Printf("Error loading AWS config: %v\n", err)
+		fmt.Println("Please ensure AWS credentials are set via environment variables:")
+		fmt.Println("  export AWS_ACCESS_KEY_ID=<your-access-key>")
+		fmt.Println("  export AWS_SECRET_ACCESS_KEY=<your-secret-key>")
+		fmt.Println("  export AWS_SESSION_TOKEN=<your-session-token> # if using temporary credentials")
+		return nil
 	}
 
-	s3Client := s3.New(cfg)
+	s3Client := s3.NewFromConfig(cfg)
 
 	return &s3Storage{
 		client: s3Client,
@@ -55,73 +60,27 @@ type s3Storage struct {
 }
 
 func (s *s3Storage) Upload(data []byte, filename string) error {
-	input := s3.PutObjectInput{
-		Bucket: &s.bucket,
-		Key:    filename,
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(filename),
 		Body:   bytes.NewReader(data),
 	}
-	_, err := s.client.PutObject(&input)
+	_, err := s.client.PutObject(context.Background(), input)
 	return err
 }
 
 func (s *s3Storage) Download(filename string) ([]byte, error) {
-	output, err := s.client.GetObject(&s3.GetObjectInput{
-		Bucket: &s.bucket,
-		Key:    filename,
-	})
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(filename),
+	}
+	output, err := s.client.GetObject(context.Background(), input)
 	if err != nil {
 		return nil, err
 	}
 	defer output.Body.Close()
 
 	data, err := io.ReadAll(output.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
-}
-
-func NewGoogleDriveStorage(serviceAccountJSON string, folderID string) Storage {
-	ctx := context.Background()
-
-	client, err := gcloudstorage.NewClient(ctx, option.WithCredentialsFile(serviceAccountJSON))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create storage client: %v", err)
-	}
-
-	return &googleDriveStorage{
-		client:    client,
-		folderID: folderID,
-	}, nil
-}
-
-type googleDriveStorage struct {
-	client *storage.Client
-	folderID string
-}
-
-func (g *googleDriveStorage) Upload(data []byte, filename string) error {
-	req := storage.InsertRequest{
-		Bucket:     g.folderID,
-		Name:      filename,
-		Data:      data,
-		MimeType:  "text/plain",
-		Overwrite: true,
-	}
-
-	_, err := g.client.Upload(req)
-	return err
-}
-
-func (g *googleDriveStorage) Download(filename string) ([]byte, error) {
-	rc, err := g.client.Download(g.folderID, filename, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-
-	data, err := io.ReadAll(rc.Body)
 	if err != nil {
 		return nil, err
 	}

@@ -9,37 +9,40 @@ import (
 
 type Config struct {
 	Import struct {
-		Driver              string
-		Host               string
-		Port               int
-		Username           string
-		Password           string
-		Database           string
-		Tables             []string
-		Filepath           string
-		Format             string
-		FolderPath         string
-		ExcludeTable       []string
+		Driver             string
+		Host              string
+		Port              int
+		Username          string
+		Password          string
+		Database          string
+		Tables            []string
+		Filepath          string
+		Format            string
+		FolderPath        string
+		ExcludeTable      []string
 		ExcludeTableSchema []string
 		ExcludeTableData   []string
+		Storage           string
+		S3Bucket          string
+		S3Region          string
 	}
 	Export struct {
-		Driver              string
-		Host               string
-		Port               int
-		Username           string
-		Password           string
-		Database           string
-		Tables             []string
-		Filepath           string
-		Format             string
-		FolderPath         string
-		ExcludeTable       []string
+		Driver             string
+		Host              string
+		Port              int
+		Username          string
+		Password          string
+		Database          string
+		Tables            []string
+		Filepath          string
+		Format            string
+		FolderPath        string
+		ExcludeTable      []string
 		ExcludeTableSchema []string
 		ExcludeTableData   []string
-		Storage            string
-		S3Bucket           string
-		S3Region           string
+		Storage           string
+		S3Bucket          string
+		S3Region          string
 	}
 }
 
@@ -73,6 +76,9 @@ func LoadConfig() (*Config, error) {
 	config.Import.Filepath = getViperString("syncdb_import_filepath", "")
 	config.Import.Format = getViperString("syncdb_import_format", "sql")
 	config.Import.FolderPath = getViperString("syncdb_import_folder_path", "")
+	config.Import.S3Bucket = getViperString("syncdb_import_s3_bucket", "")
+	config.Import.S3Region = getViperString("syncdb_import_s3_region", "")
+	config.Import.Storage = getViperString("syncdb_import_storage", "local")
 
 	// Handle import tables
 	if tables := getViperString("syncdb_import_tables", ""); tables != "" {
@@ -100,9 +106,9 @@ func LoadConfig() (*Config, error) {
 	config.Export.Filepath = getViperString("syncdb_export_filepath", "")
 	config.Export.Format = getViperString("syncdb_export_format", "sql")
 	config.Export.FolderPath = getViperString("syncdb_export_folder_path", "")
-	config.Export.Storage = getViperString("syncdb_export_storage", "local")
 	config.Export.S3Bucket = getViperString("syncdb_export_s3_bucket", "")
 	config.Export.S3Region = getViperString("syncdb_export_s3_region", "")
+	config.Export.Storage = getViperString("syncdb_export_storage", "local")
 
 	// Handle export tables
 	if tables := getViperString("syncdb_export_tables", ""); tables != "" {
@@ -130,6 +136,9 @@ func LoadConfig() (*Config, error) {
 	fmt.Printf("Debug: Export Storage = %s\n", config.Export.Storage)
 	fmt.Printf("Debug: Export S3 Bucket = %s\n", config.Export.S3Bucket)
 	fmt.Printf("Debug: Export S3 Region = %s\n", config.Export.S3Region)
+
+	// Note: AWS credentials should be set as environment variables (e.g. AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+	// or using a shared credentials file (~/.aws/credentials). See https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
 
 	return config, nil
 }
