@@ -206,31 +206,33 @@ func GetNonVirtualColumns(db *sql.DB, table string, driver string) ([]string, er
 }
 
 // ExportTableData exports all data from the specified table
-func ExportTableData(db *sql.DB, table string, condition string, driver string) ([]map[string]interface{}, error) {
+func ExportTableData(db *sql.DB, table string, condition string, driver string) ([]map[string]interface{}, []string, error) {
 	// Get non-virtual column names
 	columns, err := GetNonVirtualColumns(db, table, driver)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get non-virtual columns: %v", err)
+		return nil, nil, fmt.Errorf("failed to get non-virtual columns: %v", err)
 	}
 
 	// Build query with specific columns instead of *
 	var columnList string
+	var escapedColumns []string
 	switch driver {
 	case "mysql":
 		// For MySQL, escape column names with backticks
-		escapedColumns := make([]string, len(columns))
+		escapedColumns = make([]string, len(columns))
 		for i, col := range columns {
 			escapedColumns[i] = fmt.Sprintf("`%s`", col)
 		}
 		columnList = strings.Join(escapedColumns, ", ")
 	case "postgres":
 		// For Postgres, escape column names with double quotes
-		escapedColumns := make([]string, len(columns))
+		escapedColumns = make([]string, len(columns))
 		for i, col := range columns {
 			escapedColumns[i] = fmt.Sprintf(`"%s"`, col)
 		}
 		columnList = strings.Join(escapedColumns, ", ")
 	default:
+		escapedColumns = columns
 		columnList = strings.Join(columns, ", ")
 	}
 
@@ -241,7 +243,7 @@ func ExportTableData(db *sql.DB, table string, condition string, driver string) 
 
 	rows, err := db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query data: %v", err)
+		return nil, nil, fmt.Errorf("failed to query data: %v", err)
 	}
 	defer rows.Close()
 
@@ -258,12 +260,12 @@ func ExportTableData(db *sql.DB, table string, condition string, driver string) 
 	// Iterate through rows
 	for rows.Next() {
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %v", err)
+			return nil, nil, fmt.Errorf("failed to scan row: %v", err)
 		}
 
-		// Create a map for this row
+		// Create a map for this row using escaped column names
 		row := make(map[string]interface{})
-		for i, col := range columns {
+		for i, col := range escapedColumns {
 			val := values[i]
 			b, ok := val.([]byte)
 			if ok {
@@ -276,7 +278,7 @@ func ExportTableData(db *sql.DB, table string, condition string, driver string) 
 		result = append(result, row)
 	}
 
-	return result, nil
+	return result, escapedColumns, nil
 }
 
 // ImportTableData imports data into the specified table
