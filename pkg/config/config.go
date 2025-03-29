@@ -9,28 +9,34 @@ import (
 
 type Config struct {
 	Import struct {
-		Driver     string
-		Host       string
-		Port       int
-		Username   string
-		Password   string
-		Database   string
-		Tables     []string
-		Filepath   string
-		Format     string
-		FolderPath string
+		Driver              string
+		Host               string
+		Port               int
+		Username           string
+		Password           string
+		Database           string
+		Tables             []string
+		Filepath           string
+		Format             string
+		FolderPath         string
+		ExcludeTable       []string
+		ExcludeTableSchema []string
+		ExcludeTableData   []string
 	}
 	Export struct {
-		Driver     string
-		Host       string
-		Port       int
-		Username   string
-		Password   string
-		Database   string
-		Tables     []string
-		Filepath   string
-		Format     string
-		FolderPath string
+		Driver              string
+		Host               string
+		Port               int
+		Username           string
+		Password           string
+		Database           string
+		Tables             []string
+		Filepath           string
+		Format             string
+		FolderPath         string
+		ExcludeTable       []string
+		ExcludeTableSchema []string
+		ExcludeTableData   []string
 	}
 }
 
@@ -70,6 +76,17 @@ func LoadConfig() (*Config, error) {
 		config.Import.Tables = strings.Split(tables, ",")
 	}
 
+	// Handle import table exclusions
+	if tables := getViperString("syncdb_import_exclude_table", ""); tables != "" {
+		config.Import.ExcludeTable = strings.Split(tables, ",")
+	}
+	if tables := getViperString("syncdb_import_exclude_table_schema", ""); tables != "" {
+		config.Import.ExcludeTableSchema = strings.Split(tables, ",")
+	}
+	if tables := getViperString("syncdb_import_exclude_table_data", ""); tables != "" {
+		config.Import.ExcludeTableData = strings.Split(tables, ",")
+	}
+
 	// Export config
 	config.Export.Driver = getViperString("syncdb_export_driver", "mysql")
 	config.Export.Host = getViperString("syncdb_export_host", "localhost")
@@ -84,6 +101,17 @@ func LoadConfig() (*Config, error) {
 	// Handle export tables
 	if tables := getViperString("syncdb_export_tables", ""); tables != "" {
 		config.Export.Tables = strings.Split(tables, ",")
+	}
+
+	// Handle export table exclusions
+	if tables := getViperString("syncdb_export_exclude_table", ""); tables != "" {
+		config.Export.ExcludeTable = strings.Split(tables, ",")
+	}
+	if tables := getViperString("syncdb_export_exclude_table_schema", ""); tables != "" {
+		config.Export.ExcludeTableSchema = strings.Split(tables, ",")
+	}
+	if tables := getViperString("syncdb_export_exclude_table_data", ""); tables != "" {
+		config.Export.ExcludeTableData = strings.Split(tables, ",")
 	}
 
 	// Debug output

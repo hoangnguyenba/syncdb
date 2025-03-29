@@ -122,6 +122,55 @@ func newExportCommand() *cobra.Command {
 				}
 			}
 
+			// Handle table exclusions
+			var excludeTables []string
+			var excludeTableSchema []string
+			var excludeTableData []string
+
+			if cmd.Flags().Changed("exclude-table") {
+				excludeTables, _ = cmd.Flags().GetStringSlice("exclude-table")
+			} else {
+				excludeTables = cfg.Export.ExcludeTable
+			}
+
+			if cmd.Flags().Changed("exclude-table-schema") {
+				excludeTableSchema, _ = cmd.Flags().GetStringSlice("exclude-table-schema")
+			} else {
+				excludeTableSchema = cfg.Export.ExcludeTableSchema
+			}
+
+			if cmd.Flags().Changed("exclude-table-data") {
+				excludeTableData, _ = cmd.Flags().GetStringSlice("exclude-table-data")
+			} else {
+				excludeTableData = cfg.Export.ExcludeTableData
+			}
+
+			// Create a map for faster lookup
+			excludeTableMap := make(map[string]bool)
+			excludeSchemaMap := make(map[string]bool)
+			excludeDataMap := make(map[string]bool)
+
+			for _, t := range excludeTables {
+				excludeTableMap[t] = true
+				excludeSchemaMap[t] = true
+				excludeDataMap[t] = true
+			}
+			for _, t := range excludeTableSchema {
+				excludeSchemaMap[t] = true
+			}
+			for _, t := range excludeTableData {
+				excludeDataMap[t] = true
+			}
+
+			// Filter out fully excluded tables
+			var filteredTables []string
+			for _, t := range tables {
+				if !excludeTableMap[t] {
+					filteredTables = append(filteredTables, t)
+				}
+			}
+			tables = filteredTables
+
 			// Create timestamp for folder
 			timestamp := time.Now().Format("20060102_150405")
 			exportPath := filepath.Join(folderPath, timestamp)
@@ -155,6 +204,11 @@ func newExportCommand() *cobra.Command {
 				exportData.Schema = make(map[string]string)
 				var schemaOutput []string
 				for _, table := range tables {
+					// Skip schema for excluded tables
+					if excludeSchemaMap[table] {
+						continue
+					}
+
 					schema, err := db.GetTableSchema(database, table, dbDriver)
 					if err != nil {
 						return fmt.Errorf("failed to get schema for table %s: %v", table, err)
@@ -198,6 +252,11 @@ func newExportCommand() *cobra.Command {
 
 				// Skip data export for views unless include-view-data is true
 				if isView && !includeViewData {
+					continue
+				}
+
+				// Skip data for excluded tables
+				if excludeDataMap[table] {
 					continue
 				}
 
@@ -295,6 +354,11 @@ func newExportCommand() *cobra.Command {
 
 	// Add new flag for view data inclusion
 	cmd.Flags().Bool("include-view-data", false, "Include data from views in export")
+
+	// Add table exclusion flags
+	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude (both schema and data)")
+	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
+	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
 
 	return cmd
 }

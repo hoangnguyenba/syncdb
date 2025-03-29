@@ -167,6 +167,9 @@ syncdb import \
 - `--condition`: WHERE condition for filtering data during export
 - `--folder-path`: Base folder path for export (default: database name)
 - `--format`: Output format (json, sql) (default: "sql")
+- `--exclude-table`: Exclude both schema and data for specified tables
+- `--exclude-table-schema`: Exclude schema for specified tables
+- `--exclude-table-data`: Exclude data for specified tables
 
 ### Import Settings
 

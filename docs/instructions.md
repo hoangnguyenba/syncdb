@@ -24,6 +24,10 @@ This project is a Golang-based CLI tool for syncing databases through export and
 - **Include Schema:** Flag to include the database schema in the export/import (default: false).
 - **Condition for Export:** Option to add a WHERE condition (e.g., `created_at > 2024-01-01`) to filter data during export.
 - **Upsert on Import:** Option to perform upsert (update if exists, insert if not) when importing data (default: true).
+- **Table Exclusions:**
+  - **exclude-table:** Exclude both schema and data for specified tables.
+  - **exclude-table-schema:** Exclude schema for specified tables.
+  - **exclude-table-data:** Exclude data for specified tables.
 
 ### Storage Credentials/Settings
 - **Local File:** File path for storing the export/import file.
@@ -46,6 +50,9 @@ SYNCDB_IMPORT_TABLES=sphm_batch,sphm_payment_gateway_config
 SYNCDB_IMPORT_FILEPATH=backup.json
 SYNCDB_IMPORT_FOLDER_PATH=backup
 SYNCDB_IMPORT_FORMAT=json
+SYNCDB_IMPORT_EXCLUDE_TABLE=table1,table2
+SYNCDB_IMPORT_EXCLUDE_TABLE_SCHEMA=table3,table4
+SYNCDB_IMPORT_EXCLUDE_TABLE_DATA=table5,table6
 ```
 
 ## Export Configuration
@@ -64,6 +71,9 @@ SYNCDB_EXPORT_TABLES=sphm_batch,sphm_payment_gateway_config
 SYNCDB_EXPORT_FILEPATH=backup.json
 SYNCDB_EXPORT_FOLDER_PATH=backup
 SYNCDB_EXPORT_FORMAT=json
+SYNCDB_EXPORT_EXCLUDE_TABLE=table1,table2
+SYNCDB_EXPORT_EXCLUDE_TABLE_SCHEMA=table3,table4
+SYNCDB_EXPORT_EXCLUDE_TABLE_DATA=table5,table6
 ```
 
 ## Usage Examples
