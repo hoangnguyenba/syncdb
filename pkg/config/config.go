@@ -20,15 +20,16 @@ type Config struct {
 		Format   string
 	}
 	Export struct {
-		Driver   string
-		Host     string
-		Port     int
-		Username string
-		Password string
-		Database string
-		Tables   []string
-		Filepath string
-		Format   string
+		Driver     string
+		Host       string
+		Port       int
+		Username   string
+		Password   string
+		Database   string
+		Tables     []string
+		Filepath   string
+		Format     string
+		FolderPath string
 	}
 }
 
@@ -76,6 +77,7 @@ func LoadConfig() (*Config, error) {
 	config.Export.Database = getViperString("syncdb_export_database", "")
 	config.Export.Filepath = getViperString("syncdb_export_filepath", "")
 	config.Export.Format = getViperString("syncdb_export_format", "sql")
+	config.Export.FolderPath = getViperString("syncdb_export_folder_path", "")
 
 	// Handle export tables
 	if tables := getViperString("syncdb_export_tables", ""); tables != "" {
@@ -88,6 +90,7 @@ func LoadConfig() (*Config, error) {
 	fmt.Printf("Debug: Export Host = %s\n", config.Export.Host)
 	fmt.Printf("Debug: Export Port = %d\n", config.Export.Port)
 	fmt.Printf("Debug: Export Tables = %v\n", config.Export.Tables)
+	fmt.Printf("Debug: Export Folder Path = %s\n", config.Export.FolderPath)
 
 	return config, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -86,13 +87,6 @@ func newExportCommand() *cobra.Command {
 				tables = cfg.Export.Tables
 			}
 
-			var filePath string
-			if cmd.Flags().Changed("file-path") {
-				filePath, _ = cmd.Flags().GetString("file-path")
-			} else {
-				filePath = cfg.Export.Filepath
-			}
-
 			var format string
 			if cmd.Flags().Changed("format") {
 				format, _ = cmd.Flags().GetString("format")
@@ -100,16 +94,17 @@ func newExportCommand() *cobra.Command {
 				format = cfg.Export.Format
 			}
 
+			// Get folder path, default to database name if not provided
+			var folderPath string
+			if cmd.Flags().Changed("folder-path") {
+				folderPath, _ = cmd.Flags().GetString("folder-path")
+			} else {
+				folderPath = dbName
+			}
+
 			// Validate required values
 			if dbName == "" {
 				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_EXPORT_DATABASE env)")
-			}
-
-			// Set default filepath if not provided
-			if filePath == "" {
-				now := time.Now()
-				dateTimeSuffix := now.Format("20060102_150405") // Format as YmdHis
-				filePath = fmt.Sprintf("%s_%s.%s", dbName, dateTimeSuffix, format)
 			}
 
 			// Initialize database connection
@@ -127,7 +122,16 @@ func newExportCommand() *cobra.Command {
 				}
 			}
 
-			// Initialize export data structure
+			// Create timestamp for folder
+			timestamp := time.Now().Format("20060102_150405")
+			exportPath := filepath.Join(folderPath, dbName, timestamp)
+
+			// Create directory structure
+			if err = os.MkdirAll(exportPath, 0755); err != nil {
+				return fmt.Errorf("failed to create directory structure: %v", err)
+			}
+
+			// Initialize export data structure for metadata
 			exportData := ExportData{
 				Data: make(map[string][]map[string]interface{}),
 			}
@@ -139,55 +143,64 @@ func newExportCommand() *cobra.Command {
 			includeSchema, _ := cmd.Flags().GetBool("include-schema")
 			if includeSchema {
 				exportData.Schema = make(map[string]string)
+				var schemaOutput []string
 				for _, table := range tables {
 					schema, err := db.GetTableSchema(database, table, dbDriver)
 					if err != nil {
 						return fmt.Errorf("failed to get schema for table %s: %v", table, err)
 					}
 					exportData.Schema[table] = schema
+					if format == "sql" {
+						schemaOutput = append(schemaOutput, fmt.Sprintf("-- Table structure for %s\n%s\n", table, schema))
+					}
 				}
 				exportData.Metadata.Schema = true
+
+				// Write schema based on format
+				var schemaData []byte
+				var schemaFile string
+				if format == "sql" {
+					schemaData = []byte(strings.Join(schemaOutput, "\n"))
+					schemaFile = filepath.Join(exportPath, "schema.sql")
+				} else {
+					schemaData, err = json.MarshalIndent(exportData.Schema, "", "  ")
+					if err != nil {
+						return fmt.Errorf("failed to marshal schema: %v", err)
+					}
+					schemaFile = filepath.Join(exportPath, "schema.json")
+				}
+
+				if err = os.WriteFile(schemaFile, schemaData, 0644); err != nil {
+					return fmt.Errorf("failed to write schema file: %v", err)
+				}
 			}
 
-			// Export data for each table
+			// Export data for each table to separate files
 			for _, table := range tables {
 				data, err := db.ExportTableData(database, table, "")
 				if err != nil {
 					return fmt.Errorf("failed to export data from table %s: %v", table, err)
 				}
-				exportData.Data[table] = data
-			}
 
-			var outputData []byte
-
-			switch format {
-			case "json":
-				outputData, err = json.MarshalIndent(exportData, "", "  ")
-				if err != nil {
-					return fmt.Errorf("failed to marshal export data to JSON: %v", err)
-				}
-			case "sql":
-				// Generate SQL statements
-				var sqlStatements []string
-
-				// Add schema statements if requested
-				if includeSchema {
-					for table, schema := range exportData.Schema {
-						sqlStatements = append(sqlStatements, fmt.Sprintf("-- Table structure for %s\n%s\n", table, schema))
-					}
-				}
-
-				for table, rows := range exportData.Data {
-					// Add a separator comment before data inserts
-					sqlStatements = append(sqlStatements, fmt.Sprintf("\n-- Data for table %s\n", table))
-
-					// Get ordered columns from database schema
-					orderedColumns, err := db.GetTableColumns(database, table, dbDriver)
+				var outputData []byte
+				switch format {
+				case "json":
+					outputData, err = json.MarshalIndent(data, "", "  ")
 					if err != nil {
-						return fmt.Errorf("failed to get column order for table %s: %v", table, err)
+						return fmt.Errorf("failed to marshal data: %v", err)
+					}
+				case "sql":
+					var sqlStatements []string
+					// Get ordered column names
+					var orderedColumns []string
+					if len(data) > 0 {
+						for col := range data[0] {
+							orderedColumns = append(orderedColumns, col)
+						}
+						sort.Strings(orderedColumns)
 					}
 
-					for _, row := range rows {
+					for _, row := range data {
 						values := make([]string, 0, len(orderedColumns))
 						for _, col := range orderedColumns {
 							val := row[col]
@@ -200,7 +213,6 @@ func newExportCommand() *cobra.Command {
 								case time.Time:
 									values = append(values, fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05")))
 								case map[string]interface{}, []interface{}:
-									// Handle JSON values
 									jsonBytes, err := json.Marshal(v)
 									if err != nil {
 										return fmt.Errorf("failed to marshal JSON value: %v", err)
@@ -228,24 +240,29 @@ func newExportCommand() *cobra.Command {
 							strings.Join(values, ", "))
 						sqlStatements = append(sqlStatements, stmt)
 					}
+					outputData = []byte(strings.Join(sqlStatements, "\n") + "\n")
+				default:
+					return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", format)
 				}
-				outputData = []byte(strings.Join(sqlStatements, "\n") + "\n")
-			default:
-				return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", format)
+
+				// Write table data to file
+				tableFile := filepath.Join(exportPath, fmt.Sprintf("%s.%s", table, format))
+				if err = os.WriteFile(tableFile, outputData, 0644); err != nil {
+					return fmt.Errorf("failed to write table file %s: %v", table, err)
+				}
 			}
 
-			// Create directory if it doesn't exist
-			dir := filepath.Dir(filePath)
-			if err = os.MkdirAll(dir, 0755); err != nil {
-				return fmt.Errorf("failed to create directory: %v", err)
+			// Write metadata to a separate file
+			metadataData, err := json.MarshalIndent(exportData.Metadata, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to marshal metadata: %v", err)
+			}
+			metadataFile := filepath.Join(exportPath, "metadata.json")
+			if err = os.WriteFile(metadataFile, metadataData, 0644); err != nil {
+				return fmt.Errorf("failed to write metadata file: %v", err)
 			}
 
-			// Write to file
-			if err = os.WriteFile(filePath, outputData, 0644); err != nil {
-				return fmt.Errorf("failed to write file: %v", err)
-			}
-
-			fmt.Printf("Successfully exported %d tables to %s in %s format\n", len(tables), filePath, format)
+			fmt.Printf("Successfully exported %d tables to %s\n", len(tables), exportPath)
 			return nil
 		},
 	}
@@ -258,9 +275,9 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().String("database", "", "Database name")
 	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
 	cmd.Flags().StringSlice("tables", []string{}, "Tables to export (default: all)")
-	cmd.Flags().String("file-path", "", "Output file path")
-	cmd.Flags().String("format", "json", "Output format (json, sql)")
+	cmd.Flags().String("format", "sql", "Output format (json, sql)")
 	cmd.Flags().Bool("include-schema", false, "Include database schema in export")
+	cmd.Flags().String("folder-path", "", "Base folder path for export (default: database name)")
 
 	return cmd
 }

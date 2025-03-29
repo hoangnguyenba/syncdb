@@ -17,6 +17,7 @@ SyncDB is a command-line tool written in Go that helps you export and import dat
 - Support for selective table export/import
 - Optional schema inclusion in exports
 - Conditional data export using WHERE clauses
+- Organized export structure with timestamp-based folders
 
 ## Installation
 
@@ -42,7 +43,7 @@ go build -o syncdb cmd/syncdb/*.go
 ### Export Data
 
 ```bash
-# Basic MySQL export to local file
+# Basic MySQL export with default folder structure
 syncdb export \
   --host localhost \
   --port 3306 \
@@ -50,37 +51,25 @@ syncdb export \
   --password mypass \
   --database mydb \
   --driver mysql \
-  --storage local \
-  --file-path ./backup.json
+  --storage local
 
-# Basic PostgreSQL export to local file
+# Export to custom folder path
 syncdb export \
-  --host localhost \
-  --port 5432 \
-  --username myuser \
-  --password mypass \
   --database mydb \
-  --driver postgres \
-  --storage local \
-  --file-path ./backup.json
+  --folder-path /path/to/exports
 
-# Export specific tables
+# Export specific tables with schema
 syncdb export \
   --database mydb \
   --tables table1,table2 \
-  --file-path ./backup.json
-
-# Export with schema
-syncdb export \
-  --database mydb \
   --include-schema \
-  --file-path ./backup.json
+  --folder-path ./backups
 
 # Export with condition
 syncdb export \
   --database mydb \
   --condition "created_at > '2024-01-01'" \
-  --file-path ./backup.json
+  --folder-path ./backups
 
 # Export to S3
 syncdb export \
@@ -94,6 +83,18 @@ syncdb export \
   --database mydb \
   --storage gdrive \
   --gdrive-folder folder_id
+```
+
+The export command will create a folder structure like this:
+```
+<folder-path>/
+└── <database>/
+    └── <timestamp>/
+        ├── metadata.json
+        ├── schema.json (if --include-schema is used)
+        ├── table1.json
+        ├── table2.json
+        └── ...
 ```
 
 ### Import Data
@@ -163,6 +164,8 @@ syncdb import \
 
 - `--include-schema`: Include database schema in export
 - `--condition`: WHERE condition for filtering data during export
+- `--folder-path`: Base folder path for export (default: database name)
+- `--format`: Output format (json, sql) (default: "json")
 
 ### Import Settings
 
@@ -172,7 +175,6 @@ syncdb import \
 
 #### Local Storage
 - `--storage local`: Use local filesystem
-- `--file-path`: Path to store/read the file
 
 #### S3 Storage
 - `--storage s3`: Use AWS S3
@@ -198,6 +200,7 @@ export SYNCDB_USERNAME=myuser
 export SYNCDB_PASSWORD=mypass
 export SYNCDB_DATABASE=mydb
 export SYNCDB_DRIVER=mysql
+export SYNCDB_FOLDER_PATH=/path/to/exports
 ```
 
 ## Contributing
