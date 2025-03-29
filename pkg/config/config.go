@@ -37,6 +37,9 @@ type Config struct {
 		ExcludeTable       []string
 		ExcludeTableSchema []string
 		ExcludeTableData   []string
+		Storage            string
+		S3Bucket           string
+		S3Region           string
 	}
 }
 
@@ -97,6 +100,9 @@ func LoadConfig() (*Config, error) {
 	config.Export.Filepath = getViperString("syncdb_export_filepath", "")
 	config.Export.Format = getViperString("syncdb_export_format", "sql")
 	config.Export.FolderPath = getViperString("syncdb_export_folder_path", "")
+	config.Export.Storage = getViperString("syncdb_export_storage", "local")
+	config.Export.S3Bucket = getViperString("syncdb_export_s3_bucket", "")
+	config.Export.S3Region = getViperString("syncdb_export_s3_region", "")
 
 	// Handle export tables
 	if tables := getViperString("syncdb_export_tables", ""); tables != "" {
@@ -121,6 +127,9 @@ func LoadConfig() (*Config, error) {
 	fmt.Printf("Debug: Export Port = %d\n", config.Export.Port)
 	fmt.Printf("Debug: Export Tables = %v\n", config.Export.Tables)
 	fmt.Printf("Debug: Export Folder Path = %s\n", config.Export.FolderPath)
+	fmt.Printf("Debug: Export Storage = %s\n", config.Export.Storage)
+	fmt.Printf("Debug: Export S3 Bucket = %s\n", config.Export.S3Bucket)
+	fmt.Printf("Debug: Export S3 Region = %s\n", config.Export.S3Region)
 
 	return config, nil
 }

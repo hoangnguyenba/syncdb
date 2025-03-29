@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/hoangnguyenba/syncdb/pkg/config"
 	"github.com/hoangnguyenba/syncdb/pkg/db"
 	"github.com/spf13/cobra"
@@ -102,6 +105,28 @@ func newExportCommand() *cobra.Command {
 				folderPath, _ = cmd.Flags().GetString("folder-path")
 			} else {
 				folderPath = ""
+			}
+
+			// Get storage options
+			var storage string
+			if cmd.Flags().Changed("storage") {
+				storage, _ = cmd.Flags().GetString("storage")
+			} else {
+				storage = cfg.Export.Storage
+			}
+
+			var s3Bucket string
+			if cmd.Flags().Changed("s3-bucket") {
+				s3Bucket, _ = cmd.Flags().GetString("s3-bucket")
+			} else {
+				s3Bucket = cfg.Export.S3Bucket
+			}
+
+			var s3Region string
+			if cmd.Flags().Changed("s3-region") {
+				s3Region, _ = cmd.Flags().GetString("s3-region")
+			} else {
+				s3Region = cfg.Export.S3Region
 			}
 
 			// Validate required values
@@ -402,7 +427,119 @@ func newExportCommand() *cobra.Command {
 					return fmt.Errorf("failed to create zip archive: %v", err)
 				}
 
+				// Close the zip writer before uploading to S3
+				zipWriter.Close()
+
+				// If storage is s3, upload to S3
+				if storage == "s3" {
+					if s3Bucket == "" {
+						return fmt.Errorf("s3-bucket is required when storage is set to s3")
+					}
+					if s3Region == "" {
+						return fmt.Errorf("s3-region is required when storage is set to s3")
+					}
+
+					// Create AWS session
+					sess, err := session.NewSession(&aws.Config{
+						Region: aws.String(s3Region),
+					})
+					if err != nil {
+						return fmt.Errorf("failed to create AWS session: %v", err)
+					}
+
+					// Create S3 service client
+					svc := s3.New(sess)
+
+					// Upload zip file to S3
+					file, err := os.Open(zipFileName)
+					if err != nil {
+						return fmt.Errorf("failed to open zip file for S3 upload: %v", err)
+					}
+					defer file.Close()
+
+					s3Key := filepath.Base(zipFileName)
+					_, err = svc.PutObject(&s3.PutObjectInput{
+						Bucket: aws.String(s3Bucket),
+						Key:    aws.String(s3Key),
+						Body:   file,
+					})
+					if err != nil {
+						return fmt.Errorf("failed to upload zip file to S3: %v", err)
+					}
+
+					fmt.Printf("Uploaded %s to s3://%s/%s\n", zipFileName, s3Bucket, s3Key)
+				}
+
 				// Clean up the exported directory after successful zip creation
+				if err := os.RemoveAll(exportPath); err != nil {
+					fmt.Printf("Warning: failed to clean up export directory: %v\n", err)
+				}
+			} else if storage == "s3" {
+				// If not zipping but using S3 storage, upload individual files
+				if s3Bucket == "" {
+					return fmt.Errorf("s3-bucket is required when storage is set to s3")
+				}
+				if s3Region == "" {
+					return fmt.Errorf("s3-region is required when storage is set to s3")
+				}
+
+				// Create AWS session
+				sess, err := session.NewSession(&aws.Config{
+					Region: aws.String(s3Region),
+				})
+				if err != nil {
+					return fmt.Errorf("failed to create AWS session: %v", err)
+				}
+
+				// Create S3 service client
+				svc := s3.New(sess)
+
+				// Upload files to S3
+				err = filepath.Walk(exportPath, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+
+					// Skip directories
+					if info.IsDir() {
+						return nil
+					}
+
+					// Open file
+					file, err := os.Open(path)
+					if err != nil {
+						return fmt.Errorf("failed to open file %s: %v", path, err)
+					}
+					defer file.Close()
+
+					// Create S3 key (path relative to exportPath)
+					relPath, err := filepath.Rel(exportPath, path)
+					if err != nil {
+						return fmt.Errorf("failed to get relative path: %v", err)
+					}
+					s3Key := filepath.Join(timestamp, relPath)
+
+					// Upload to S3
+					_, err = svc.PutObject(&s3.PutObjectInput{
+						Bucket: aws.String(s3Bucket),
+						Key:    aws.String(s3Key),
+						Body:   file,
+					})
+					if err != nil {
+						return fmt.Errorf("failed to upload file %s to S3: %v", path, err)
+					}
+
+					fmt.Printf("Uploaded %s to s3://%s/%s\n", path, s3Bucket, s3Key)
+					return nil
+				})
+
+				if err != nil {
+					return fmt.Errorf("failed to upload files to S3: %v", err)
+				}
+
+				fmt.Printf("Successfully uploaded all files to S3 bucket: %s\n", s3Bucket)
+
+				// Clean up the exported directory after successful S3 upload
 				if err := os.RemoveAll(exportPath); err != nil {
 					fmt.Printf("Warning: failed to clean up export directory: %v\n", err)
 				}
@@ -413,28 +550,25 @@ func newExportCommand() *cobra.Command {
 		},
 	}
 
-	// Database connection flags
-	cmd.Flags().String("host", "localhost", "Database host")
-	cmd.Flags().Int("port", 3306, "Database port")
+	// Add flags
+	cmd.Flags().String("host", "", "Database host")
+	cmd.Flags().Int("port", 0, "Database port")
 	cmd.Flags().String("username", "", "Database username")
 	cmd.Flags().String("password", "", "Database password")
 	cmd.Flags().String("database", "", "Database name")
-	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
-	cmd.Flags().StringSlice("tables", []string{}, "Tables to export (default: all)")
-	cmd.Flags().String("format", "sql", "Output format (json, sql)")
-	cmd.Flags().Bool("include-schema", false, "Include database schema in export")
-	cmd.Flags().String("folder-path", "", "Base folder path for export (default: database name)")
-
-	// Add new flag for view data inclusion
-	cmd.Flags().Bool("include-view-data", false, "Include data from views in export")
-
-	// Add table exclusion flags
-	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude (both schema and data)")
-	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
-	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
-
-	// Add zip flag
-	cmd.Flags().Bool("zip", false, "Create a zip file of the exported data")
+	cmd.Flags().String("driver", "", "Database driver (mysql or postgres)")
+	cmd.Flags().StringSlice("tables", []string{}, "Tables to export (comma-separated)")
+	cmd.Flags().String("format", "", "Export format (sql or json)")
+	cmd.Flags().String("folder-path", "", "Folder path for export")
+	cmd.Flags().Bool("include-schema", false, "Include schema in export")
+	cmd.Flags().Bool("include-view-data", false, "Include view data in export")
+	cmd.Flags().Bool("zip", false, "Create zip archive")
+	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude from export (comma-separated)")
+	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema from export (comma-separated)")
+	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data from export (comma-separated)")
+	cmd.Flags().String("storage", "", "Storage type (local or s3)")
+	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
+	cmd.Flags().String("s3-region", "", "S3 region")
 
 	return cmd
 }
