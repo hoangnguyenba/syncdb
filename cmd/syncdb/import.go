@@ -121,6 +121,7 @@ func newImportCommand() *cobra.Command {
 
 			truncate, _ := cmd.Flags().GetBool("truncate")
 			upsert, _ := cmd.Flags().GetBool("upsert")
+			includeSchema, _ := cmd.Flags().GetBool("include-schema")
 
 			// Validate required values
 			if dbName == "" {
@@ -132,6 +133,34 @@ func newImportCommand() *cobra.Command {
 				latestDir, err := getLatestTimestampDir(folderPath, dbName)
 				if err != nil {
 					return err
+				}
+
+				// Initialize database connection
+				database, err := db.InitDB(dbDriver, host, port, username, password, dbName)
+				if err != nil {
+					return fmt.Errorf("failed to connect to database: %v", err)
+				}
+				defer database.Close()
+
+				// Import schema if requested
+				if includeSchema {
+					schemaPath := filepath.Join(latestDir, "0_schema.sql")
+					schemaData, err := os.ReadFile(schemaPath)
+					if err != nil {
+						return fmt.Errorf("failed to read schema file: %v", err)
+					}
+
+					// Split schema into individual statements
+					schemaStatements := strings.Split(string(schemaData), ";")
+					for _, stmt := range schemaStatements {
+						stmt = strings.TrimSpace(stmt)
+						if stmt == "" {
+							continue
+						}
+						if _, err := database.Exec(stmt); err != nil {
+							return fmt.Errorf("failed to execute schema statement: %v", err)
+						}
+					}
 				}
 
 				// First read metadata file
@@ -151,34 +180,6 @@ func newImportCommand() *cobra.Command {
 
 				if err := json.Unmarshal(metadataData, &metadata); err != nil {
 					return fmt.Errorf("failed to parse metadata file: %v", err)
-				}
-
-				// Initialize database connection
-				database, err := db.InitDB(dbDriver, host, port, username, password, dbName)
-				if err != nil {
-					return fmt.Errorf("failed to connect to database: %v", err)
-				}
-				defer database.Close()
-
-				// Import schema if included
-				if metadata.Schema {
-					schemaPath := filepath.Join(latestDir, "0_schema.sql")
-					schemaData, err := os.ReadFile(schemaPath)
-					if err != nil {
-						return fmt.Errorf("failed to read schema file: %v", err)
-					}
-
-					// Split schema into individual statements
-					schemaStatements := strings.Split(string(schemaData), ";")
-					for _, stmt := range schemaStatements {
-						stmt = strings.TrimSpace(stmt)
-						if stmt == "" {
-							continue
-						}
-						if _, err := database.Exec(stmt); err != nil {
-							return fmt.Errorf("failed to execute schema statement: %v", err)
-						}
-					}
 				}
 
 				// Import table data
@@ -376,6 +377,7 @@ func newImportCommand() *cobra.Command {
 	// Import settings flags
 	cmd.Flags().Bool("truncate", false, "Truncate tables before import")
 	cmd.Flags().Bool("upsert", true, "Use upsert instead of insert")
+	cmd.Flags().Bool("include-schema", false, "Import schema if available in backup")
 
 	return cmd
 }
