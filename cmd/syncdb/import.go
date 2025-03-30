@@ -615,6 +615,26 @@ func newImportCommand() *cobra.Command {
 				fmt.Printf("Starting import of %d tables into database '%s'\n", len(metadata.Tables), dbName)
 				var totalRecords int
 				
+				// Get include-data flag
+				includeData := true
+				for _, arg := range os.Args {
+					if arg == "--include-data=false" || arg == "--include-data" && (os.Args[len(os.Args)-1] == "false") {
+						includeData = false
+						break
+					}
+				}
+
+				// Check if data should be imported based on metadata
+				if !metadata.ViewData && includeData {
+					return fmt.Errorf("cannot import data: original export did not include data")
+				}
+
+				// Skip data import if include-data is false
+				if !includeData {
+					fmt.Println("Skipping data import as --include-data is set to false")
+					return nil
+				}
+
 				// Import table data
 				for i, table := range metadata.Tables {
 					// Skip tables that are completely excluded
@@ -776,11 +796,23 @@ func newImportCommand() *cobra.Command {
 			}
 
 			// Get include-data flag
-			includeData, _ := cmd.Flags().GetBool("include-data")
+			includeData := true
+			for _, arg := range os.Args {
+				if arg == "--include-data=false" || arg == "--include-data" && (os.Args[len(os.Args)-1] == "false") {
+					includeData = false
+					break
+				}
+			}
 
 			// Check if data should be imported based on metadata
 			if !importData.Metadata.IncludeData && includeData {
 				return fmt.Errorf("cannot import data: original export did not include data")
+			}
+
+			// Skip data import if include-data is false
+			if !includeData {
+				fmt.Println("Skipping data import as --include-data is set to false")
+				return nil
 			}
 
 			// Import data for each table
