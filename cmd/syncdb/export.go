@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -373,31 +374,76 @@ func newExportCommand() *cobra.Command {
 
 					// Convert data to SQL format
 					var sqlStatements []string
+
+					// Get all columns in a consistent order
+					columnSet := make(map[string]bool)
 					for _, row := range data {
-						columns := make([]string, 0, len(row))
-						values := make([]string, 0, len(row))
-						for col, val := range row {
-							columns = append(columns, col)
-							switch v := val.(type) {
-							case nil:
-								values = append(values, "NULL")
-							case string:
-								values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
-							case time.Time:
-								values = append(values, fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05")))
-							default:
-								values = append(values, fmt.Sprintf("%v", v))
-							}
+						for col := range row {
+							columnSet[col] = true
 						}
-						sqlStatements = append(sqlStatements, fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);",
+					}
+
+					allColumns := make([]string, 0, len(columnSet))
+					for col := range columnSet {
+						allColumns = append(allColumns, col)
+					}
+					sort.Strings(allColumns) // Sort columns for consistency
+
+					// Add backticks to column names
+					backtickedColumns := make([]string, len(allColumns))
+					for i, col := range allColumns {
+						backtickedColumns[i] = fmt.Sprintf("`%s`", col)
+					}
+
+					// Process in batches of 100 rows for bulk insert
+					batchSize := 100
+					for i := 0; i < len(data); i += batchSize {
+						end := i + batchSize
+						if end > len(data) {
+							end = len(data)
+						}
+
+						batch := data[i:end]
+						if len(batch) == 0 {
+							continue
+						}
+
+						// Start the INSERT statement
+						insertStmt := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES\n",
 							table,
-							strings.Join(columns, ", "),
-							strings.Join(values, ", ")))
+							strings.Join(backtickedColumns, ", "))
+
+						valueStrings := make([]string, 0, len(batch))
+
+						// Generate value sets for each row
+						for _, row := range batch {
+							values := make([]string, len(allColumns))
+							for j, col := range allColumns {
+								val, exists := row[col]
+								if !exists || val == nil {
+									values[j] = "NULL"
+								} else {
+									switch v := val.(type) {
+									case string:
+										values[j] = fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''"))
+									case time.Time:
+										values[j] = fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05"))
+									default:
+										values[j] = fmt.Sprintf("%v", v)
+									}
+								}
+							}
+							valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(values, ", ")))
+						}
+
+						// Complete the statement
+						insertStmt += strings.Join(valueStrings, ",\n") + ";"
+						sqlStatements = append(sqlStatements, insertStmt)
 					}
 
 					// Write data to file
 					dataFile := filepath.Join(exportPath, fmt.Sprintf("%d_%s.sql", i+1, table))
-					if err := os.WriteFile(dataFile, []byte(strings.Join(sqlStatements, "\n")), 0644); err != nil {
+					if err := os.WriteFile(dataFile, []byte(strings.Join(sqlStatements, "\n\n")), 0644); err != nil {
 						return fmt.Errorf("failed to write data file for table %s: %v", table, err)
 					}
 					fmt.Printf("Wrote %d records to %s\n", len(data), dataFile)
@@ -443,7 +489,7 @@ func newExportCommand() *cobra.Command {
 					// Preserve directory structure by including the timestamp directory
 					relPath, err := filepath.Rel(filepath.Dir(exportPath), path)
 					if err != nil {
-						return fmt.Errorf("failed to get relative path: %v", path, err)
+						return fmt.Errorf("failed to get relative path for %s: %v", path, err)
 					}
 					header.Name = relPath
 
@@ -544,7 +590,7 @@ func newExportCommand() *cobra.Command {
 					// Create S3 key (path relative to exportPath, include folder path)
 					relPath, err := filepath.Rel(exportPath, path)
 					if err != nil {
-						return fmt.Errorf("failed to get relative path: %v", path, err)
+						return fmt.Errorf("failed to get relative path for %s: %v", path, err)
 					}
 					s3Key := filepath.Join(folderPath, timestamp, relPath)
 
