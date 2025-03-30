@@ -560,7 +560,11 @@ func SortTablesByDependencies(tables []string, dependencies map[string][]string)
 
 		// Process dependencies first
 		for _, dep := range dependencies[table] {
-			// Skip if dependency is not in our target tables
+			// Skip if dependency is not in our target tables or is the same table (self-reference)
+			if dep == table {
+				continue
+			}
+
 			found := false
 			for _, t := range tables {
 				if t == dep {
