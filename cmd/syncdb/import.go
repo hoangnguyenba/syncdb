@@ -497,6 +497,7 @@ func newImportCommand() *cobra.Command {
 							Tables       []string  `json:"tables"`
 							Schema       bool      `json:"include_schema"`
 							ViewData     bool      `json:"include_view_data"`
+							Base64       bool      `json:"base64"`
 						}
 						if err := json.Unmarshal(metadataData, &metadata); err != nil {
 							return fmt.Errorf("failed to parse metadata file: %v", err)
@@ -670,23 +671,41 @@ func newImportCommand() *cobra.Command {
 							continue
 						}
 
-						fmt.Printf("Importing table '%s'...", table)
+						fmt.Printf("\nImporting data for table %s...\n", table)
 
-						// Read table data from file
-						tableFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table))
-						tableContent, err := os.ReadFile(tableFile)
+						// Check if we need to decode base64 values
+						useBase64, _ := cmd.Flags().GetBool("base64")
+
+						// Read metadata file to check if export was done with base64
+						metadataFile := filepath.Join(importDir, "0_metadata.json")
+						metadataBytes, err := os.ReadFile(metadataFile)
+						if err == nil {
+							var metadata struct {
+								Base64 bool `json:"base64"`
+							}
+							if err := json.Unmarshal(metadataBytes, &metadata); err == nil {
+								// If metadata has base64 flag set to true, override the flag
+								if metadata.Base64 {
+									fmt.Println("Metadata indicates base64 encoding was used during export. Enabling base64 decoding automatically.")
+									useBase64 = true
+								}
+							}
+						}
+
+						// Read SQL file content
+						sqlFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table))
+						sqlBytes, err := os.ReadFile(sqlFile)
 						if err != nil {
-							return fmt.Errorf("failed to read table file %s: %v", table, err)
+							return fmt.Errorf("failed to read SQL file %s: %v", sqlFile, err)
 						}
 
-						// Clean the SQL content (remove trailing % if present)
-						sqlContent := string(tableContent)
-						if strings.HasSuffix(sqlContent, "%") {
-							sqlContent = sqlContent[:len(sqlContent)-1]
-						}
+						// Convert to string for processing
+						sqlContent := string(sqlBytes)
 
-						// Try to decode Base64 values in SQL
-						sqlContent = decodeBase64Values(sqlContent)
+						// Try to decode Base64 values in SQL if the base64 flag is enabled
+						if useBase64 {
+							sqlContent = decodeBase64Values(sqlContent)
+						}
 
 						// Split into individual SQL statements
 						sqlStatements := strings.Split(sqlContent, ";")
@@ -835,6 +854,13 @@ func newImportCommand() *cobra.Command {
 				},
 			}
 
+			// Get base64 flag and check if it's set in metadata (for JSON format)
+			useBase64, _ := cmd.Flags().GetBool("base64")
+			if format == "json" && importData.Metadata.Base64 && !useBase64 {
+				fmt.Println("Metadata indicates base64 encoding was used during export. Enabling base64 decoding automatically.")
+				useBase64 = true
+			}
+
 			// Filter tables if specified
 			importTables := importData.Metadata.Tables
 			if len(tables) > 0 {
@@ -874,6 +900,22 @@ func newImportCommand() *cobra.Command {
 					return fmt.Errorf("table %s not found in import file", table)
 				}
 
+				// Check if we need to handle base64 decoding for string values in JSON data
+				if useBase64 && format == "json" {
+					for i, row := range data {
+						for k, v := range row {
+							if strVal, ok := v.(string); ok {
+								// Try to decode base64 values
+								if isBase64(strVal) {
+									if decodedBytes, err := base64.StdEncoding.DecodeString(strVal); err == nil {
+										data[i][k] = string(decodedBytes)
+									}
+								}
+							}
+						}
+					}
+				}
+
 				// Create a buffer to store the data
 				var buf bytes.Buffer
 				encoder := json.NewEncoder(&buf)
@@ -899,28 +941,33 @@ func newImportCommand() *cobra.Command {
 		},
 	}
 
-	// Database connection flags
-	cmd.Flags().String("host", "localhost", "Database host")
-	cmd.Flags().Int("port", 3306, "Database port")
-	cmd.Flags().String("username", "", "Database username")
-	cmd.Flags().String("password", "", "Database password")
-	cmd.Flags().String("database", "", "Database name")
-	cmd.Flags().String("driver", "mysql", "Database driver (mysql, postgres)")
-	cmd.Flags().StringSlice("tables", []string{}, "Tables to import")
-	cmd.Flags().String("file-path", "", "File path to import from")
-	cmd.Flags().String("folder-path", "", "Folder path to import from")
-	cmd.Flags().String("format", "json", "File format (json, sql)")
-	cmd.Flags().Bool("truncate", false, "Truncate tables before import")
-	cmd.Flags().Bool("include-schema", false, "Include schema in import")
-	cmd.Flags().Bool("include-data", true, "Import data from export (default: true)")
-	cmd.Flags().Bool("include-view-data", true, "Include view data in import (default: true)")
-	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude")
-	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
-	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
-	cmd.Flags().Bool("zip", false, "Import from latest zip file")
-	cmd.Flags().String("storage", "local", "Storage type (local, s3)")
-	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
-	cmd.Flags().String("s3-region", "", "S3 region")
+	// Add flags
+	flags := cmd.Flags()
+	flags.StringP("host", "H", "localhost", "Database host")
+	flags.IntP("port", "P", 3306, "Database port")
+	flags.StringP("username", "u", "", "Database username")
+	flags.StringP("password", "p", "", "Database password")
+	flags.StringP("database", "d", "", "Database name")
+	flags.StringP("driver", "D", "mysql", "Database driver (mysql, postgres)")
+	flags.StringP("path", "i", "", "Path to import files or zip file")
+	flags.StringP("folder-path", "o", "", "Folder path for temporary files (when importing from s3)")
+	flags.StringP("storage", "s", "local", "Storage type (local, s3)")
+	flags.String("s3-bucket", "", "S3 bucket name")
+	flags.String("s3-region", "", "S3 region")
+	flags.String("s3-key", "", "S3 key (path to zip file)")
+	flags.Bool("truncate", false, "Truncate tables before importing")
+	flags.Bool("skip-schema", false, "Skip schema import (only import data)")
+	flags.Bool("base64", false, "Decode values from base64 format")
+	flags.StringSlice("tables", []string{}, "Tables to import")
+	flags.String("file-path", "", "File path to import from")
+	flags.String("format", "json", "File format (json, sql)")
+	flags.Bool("include-schema", false, "Include schema in import")
+	flags.Bool("include-data", true, "Import data from export (default: true)")
+	flags.Bool("include-view-data", true, "Include view data in import (default: true)")
+	flags.StringSlice("exclude-table", []string{}, "Tables to exclude")
+	flags.StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
+	flags.StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
+	flags.Bool("zip", false, "Import from latest zip file")
 
 	return cmd
 }

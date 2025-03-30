@@ -2,9 +2,11 @@ package db
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -58,7 +60,25 @@ func ExportTableData(conn *Connection, tableName string, writer io.Writer) error
 		for i, col := range colNames {
 			val := values[i]
 			if val != nil {
-				rowData[col] = val
+				// Check if the value is a string or []byte
+				var strVal string
+				switch v := val.(type) {
+				case string:
+					strVal = v
+				case []byte:
+					strVal = string(v)
+				default:
+					rowData[col] = val
+					continue
+				}
+
+				// Attempt to decode base64 values
+				decodedStr, err := tryBase64Decode(strVal)
+				if err == nil && decodedStr != strVal {
+					rowData[col] = decodedStr
+				} else {
+					rowData[col] = strVal
+				}
 			}
 		}
 
@@ -265,4 +285,72 @@ func getNonVirtualColumns(db *sql.DB, tableName string, driver string) ([]string
 	}
 
 	return columns, rows.Err()
+}
+
+// tryBase64Decode attempts to decode a base64 string with multiple strategies
+func tryBase64Decode(s string) (string, error) {
+	// Remove any whitespace
+	s = strings.TrimSpace(s)
+	
+	// Check if the string looks like a base64 encoded value
+	base64Regex := regexp.MustCompile(`^[A-Za-z0-9+/]+={0,2}$`)
+	if !base64Regex.MatchString(s) {
+		return s, fmt.Errorf("not a base64 string")
+	}
+	
+	// Try standard base64 decoding
+	decodedBytes, err := base64.StdEncoding.DecodeString(s)
+	if err == nil {
+		// Check if decoded bytes form a valid string
+		decodedStr := string(decodedBytes)
+		if isValidDecodedString(decodedStr, s) {
+			return decodedStr, nil
+		}
+	}
+	
+	// Try URL-safe base64 decoding
+	decodedBytes, err = base64.URLEncoding.DecodeString(s)
+	if err == nil {
+		// Check if decoded bytes form a valid string
+		decodedStr := string(decodedBytes)
+		if isValidDecodedString(decodedStr, s) {
+			return decodedStr, nil
+		}
+	}
+	
+	return s, fmt.Errorf("not a valid base64 string")
+}
+
+// isValidDecodedString checks if a decoded string is meaningful
+func isValidDecodedString(decoded, original string) bool {
+	// Skip if decoding didn't change the string
+	if decoded == original {
+		return false
+	}
+	
+	// Check for timestamp-like pattern (YYYY-MM-DD HH:MM:SS)
+	timestampRegex := regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$`)
+	if timestampRegex.MatchString(decoded) {
+		return true
+	}
+	
+	// Check for email-like pattern
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	if emailRegex.MatchString(decoded) {
+		return true
+	}
+	
+	// Check for printable ASCII characters
+	for _, r := range decoded {
+		if r < 32 || r > 126 {
+			return false
+		}
+	}
+	
+	// Require minimum length and not just whitespace
+	if len(strings.TrimSpace(decoded)) > 0 {
+		return true
+	}
+	
+	return false
 }

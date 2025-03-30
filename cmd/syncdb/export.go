@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ type ExportData struct {
 		Schema       bool      `json:"include_schema"`
 		ViewData     bool      `json:"include_view_data"`
 		IncludeData  bool      `json:"include_data"`
+		Base64       bool      `json:"base64"`
 	} `json:"metadata"`
 	Schema map[string]string                   `json:"schema,omitempty"`
 	Data   map[string][]map[string]interface{} `json:"data"`
@@ -103,6 +105,12 @@ func newExportCommand() *cobra.Command {
 			includeSchema, _ := cmd.Flags().GetBool("include-schema")
 			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
 			includeData, _ := cmd.Flags().GetBool("include-data")
+
+			// Determine base64 usage
+			useBase64 := false
+			if cmd.Flags().Changed("base64") {
+				useBase64, _ = cmd.Flags().GetBool("base64")
+			}
 
 			// Get folder path, default to database name if not provided
 			var folderPath string
@@ -257,6 +265,7 @@ func newExportCommand() *cobra.Command {
 					Schema       bool      `json:"include_schema"`
 					ViewData     bool      `json:"include_view_data"`
 					IncludeData  bool      `json:"include_data"`
+					Base64       bool      `json:"base64"`
 				}{
 					ExportedAt:   time.Now(),
 					DatabaseName: dbName,
@@ -264,6 +273,7 @@ func newExportCommand() *cobra.Command {
 					Schema:       includeSchema,
 					ViewData:     includeViewData,
 					IncludeData:  includeData,
+					Base64:       false, // Explicitly set to false
 				},
 				Schema: make(map[string]string),
 				Data:   make(map[string][]map[string]interface{}),
@@ -427,7 +437,13 @@ func newExportCommand() *cobra.Command {
 								} else {
 									switch v := val.(type) {
 									case string:
-										values[j] = fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''"))
+										if useBase64 {
+											// Encode string values to base64 when the flag is enabled
+											encodedValue := base64.StdEncoding.EncodeToString([]byte(v))
+											values[j] = fmt.Sprintf("'%s'", encodedValue)
+										} else {
+											values[j] = fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''"))
+										}
 									case time.Time:
 										values[j] = fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05"))
 									default:
@@ -628,26 +644,28 @@ func newExportCommand() *cobra.Command {
 	}
 
 	// Add flags
-	cmd.Flags().String("host", "", "Database host")
-	cmd.Flags().Int("port", 0, "Database port")
-	cmd.Flags().String("username", "", "Database username")
-	cmd.Flags().String("password", "", "Database password")
-	cmd.Flags().String("database", "", "Database name")
-	cmd.Flags().String("driver", "", "Database driver (mysql or postgres)")
-	cmd.Flags().StringSlice("tables", []string{}, "Tables to export (comma-separated)")
-	cmd.Flags().String("format", "", "Export format (sql or json)")
-	cmd.Flags().String("folder-path", "", "Folder path for export")
-	cmd.Flags().Bool("include-schema", false, "Include schema in export")
-	cmd.Flags().Bool("include-view-data", false, "Include view data in export")
-	cmd.Flags().Bool("include-data", true, "Include data in export (default: true)")
-	cmd.Flags().Bool("zip", false, "Create zip archive")
-	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude from export (comma-separated)")
-	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema from export (comma-separated)")
-	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data from export (comma-separated)")
-	cmd.Flags().String("storage", "", "Storage type (local or s3)")
-	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
-	cmd.Flags().String("s3-region", "", "S3 region")
-	cmd.Flags().Int("batch-size", 500, "Batch size for bulk insert (default: 500)")
+	flags := cmd.Flags()
+	flags.StringP("host", "H", "localhost", "Database host")
+	flags.IntP("port", "P", 3306, "Database port")
+	flags.StringP("username", "u", "", "Database username")
+	flags.StringP("password", "p", "", "Database password")
+	flags.StringP("database", "d", "", "Database name")
+	flags.StringP("driver", "D", "mysql", "Database driver (mysql, postgres)")
+	flags.StringSliceP("tables", "t", []string{}, "Tables to export (comma-separated)")
+	flags.StringP("format", "f", "sql", "Export format (sql, json)")
+	flags.Bool("include-schema", true, "Include schema in export")
+	flags.Bool("include-view-data", false, "Include view data in export")
+	flags.Bool("include-data", true, "Include table data in export")
+	flags.StringP("folder-path", "o", "", "Folder path to save export files")
+	flags.StringP("storage", "s", "local", "Storage type (local, s3)")
+	flags.String("s3-bucket", "", "S3 bucket name")
+	flags.String("s3-region", "", "S3 region")
+	flags.Bool("zip", true, "Create zip file")
+	flags.Int("batch-size", 500, "Number of records to process in a batch")
+	flags.Bool("base64", false, "Encode values in base64 format")
+	flags.StringSlice("exclude-table", []string{}, "Tables to exclude from export")
+	flags.StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema from export (comma-separated)")
+	flags.StringSlice("exclude-table-data", []string{}, "Tables to exclude data from export (comma-separated)")
 
 	return cmd
 }
