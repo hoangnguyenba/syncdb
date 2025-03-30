@@ -941,33 +941,16 @@ func newImportCommand() *cobra.Command {
 		},
 	}
 
-	// Add flags
+	// Add shared flags
+	AddSharedFlags(cmd, true) // true indicates this is the import command
+
+	// Add import-specific flags
 	flags := cmd.Flags()
-	flags.StringP("host", "H", "localhost", "Database host")
-	flags.IntP("port", "P", 3306, "Database port")
-	flags.StringP("username", "u", "", "Database username")
-	flags.StringP("password", "p", "", "Database password")
-	flags.StringP("database", "d", "", "Database name")
-	flags.StringP("driver", "D", "mysql", "Database driver (mysql, postgres)")
-	flags.StringP("path", "i", "", "Path to import files or zip file")
-	flags.StringP("folder-path", "o", "", "Folder path for temporary files (when importing from s3)")
-	flags.StringP("storage", "s", "local", "Storage type (local, s3)")
-	flags.String("s3-bucket", "", "S3 bucket name")
-	flags.String("s3-region", "", "S3 region")
-	flags.String("s3-key", "", "S3 key (path to zip file)")
+	// flags.StringP("path", "i", "", "Path to import files or zip file") // This seems redundant with folder-path/file-path? Keeping for now.
+	flags.String("s3-key", "", "S3 key (path to zip file)") // Appears unused, but keeping definition
 	flags.Bool("truncate", false, "Truncate tables before importing")
-	flags.Bool("skip-schema", false, "Skip schema import (only import data)")
-	flags.Bool("base64", false, "Decode values from base64 format")
-	flags.StringSlice("tables", []string{}, "Tables to import")
-	flags.String("file-path", "", "File path to import from")
-	flags.String("format", "json", "File format (json, sql)")
-	flags.Bool("include-schema", false, "Include schema in import")
-	flags.Bool("include-data", true, "Import data from export (default: true)")
-	flags.Bool("include-view-data", true, "Include view data in import (default: true)")
-	flags.StringSlice("exclude-table", []string{}, "Tables to exclude")
-	flags.StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
-	flags.StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
-	flags.Bool("zip", false, "Import from latest zip file")
+	flags.Bool("skip-schema", false, "Skip schema import (only import data)") // Appears unused, but keeping definition
+	flags.String("file-path", "", "File path to import from (alternative to folder-path)")
 
 	return cmd
 }

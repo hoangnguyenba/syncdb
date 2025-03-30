@@ -643,29 +643,12 @@ func newExportCommand() *cobra.Command {
 		},
 	}
 
-	// Add flags
+	// Add shared flags
+	AddSharedFlags(cmd, false) // false indicates this is the export command
+
+	// Add export-specific flags
 	flags := cmd.Flags()
-	flags.StringP("host", "H", "localhost", "Database host")
-	flags.IntP("port", "P", 3306, "Database port")
-	flags.StringP("username", "u", "", "Database username")
-	flags.StringP("password", "p", "", "Database password")
-	flags.StringP("database", "d", "", "Database name")
-	flags.StringP("driver", "D", "mysql", "Database driver (mysql, postgres)")
-	flags.StringSliceP("tables", "t", []string{}, "Tables to export (comma-separated)")
-	flags.StringP("format", "f", "sql", "Export format (sql, json)")
-	flags.Bool("include-schema", true, "Include schema in export")
-	flags.Bool("include-view-data", false, "Include view data in export")
-	flags.Bool("include-data", true, "Include table data in export")
-	flags.StringP("folder-path", "o", "", "Folder path to save export files")
-	flags.StringP("storage", "s", "local", "Storage type (local, s3)")
-	flags.String("s3-bucket", "", "S3 bucket name")
-	flags.String("s3-region", "", "S3 region")
-	flags.Bool("zip", true, "Create zip file")
 	flags.Int("batch-size", 500, "Number of records to process in a batch")
-	flags.Bool("base64", false, "Encode values in base64 format")
-	flags.StringSlice("exclude-table", []string{}, "Tables to exclude from export")
-	flags.StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema from export (comma-separated)")
-	flags.StringSlice("exclude-table-data", []string{}, "Tables to exclude data from export (comma-separated)")
 
 	return cmd
 }
