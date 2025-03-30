@@ -5,9 +5,8 @@ import (
 )
 
 // AddSharedFlags defines flags common to both import and export commands.
-// The isImportCmd parameter allows for setting different defaults or descriptions
 // based on the command context.
-func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
+func AddSharedFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
 
 	// Database connection flags
@@ -19,11 +18,7 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 	flags.StringP("driver", "D", "mysql", "Database driver (mysql, postgres)")
 
 	// Table selection flags
-	if isImportCmd {
-		flags.StringSlice("tables", []string{}, "Tables to import (comma-separated)")
-	} else {
-		flags.StringSliceP("tables", "t", []string{}, "Tables to export (comma-separated)")
-	}
+	flags.StringSliceP("tables", "t", []string{}, "Tables to export (comma-separated)")
 
 	// Path and Storage flags
 	flags.StringP("folder-path", "o", "", "Folder path for export files or temporary import files")
@@ -32,9 +27,9 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 	flags.String("s3-region", "", "S3 region")
 
 	// Content flags
-	flags.Bool("include-schema", !isImportCmd, "Include schema in operation") // Default true for export, false for import
+	flags.Bool("include-schema", false, "Include schema in operation") // Default true for export, false for import
 	flags.Bool("include-data", true, "Include table data in operation")
-	flags.Bool("include-view-data", isImportCmd, "Include view data in operation") // Default true for import, false for export
+	flags.Bool("include-view-data", false, "Include view data in operation") // Default true for import, false for export
 
 	// Exclusion flags
 	flags.StringSlice("exclude-table", []string{}, "Tables to exclude from operation")
@@ -42,14 +37,9 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 	flags.StringSlice("exclude-table-data", []string{}, "Tables to exclude data from operation")
 
 	// Format/Encoding flags
-	if isImportCmd {
-		flags.String("format", "json", "File format to import (json, sql)")
-		flags.Bool("base64", false, "Decode values from base64 format during import")
-	} else {
-		flags.StringP("format", "f", "sql", "Export format (sql, json)")
-		flags.Bool("base64", false, "Encode string values in base64 format during export")
-	}
+	flags.StringP("format", "f", "sql", "Export format (sql, json)")
+	flags.Bool("base64", false, "Encode string values in base64 format during export")
 
 	// Zip flag
-	flags.Bool("zip", !isImportCmd, "Create/Use zip file") // Default true for export, false for import
+	flags.Bool("zip", false, "Create/Use zip file")
 }

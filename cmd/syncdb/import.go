@@ -942,7 +942,7 @@ func newImportCommand() *cobra.Command {
 	}
 
 	// Add shared flags
-	AddSharedFlags(cmd, true) // true indicates this is the import command
+	AddSharedFlags(cmd)
 
 	// Add import-specific flags
 	flags := cmd.Flags()

@@ -644,7 +644,7 @@ func newExportCommand() *cobra.Command {
 	}
 
 	// Add shared flags
-	AddSharedFlags(cmd, false) // false indicates this is the export command
+	AddSharedFlags(cmd)
 
 	// Add export-specific flags
 	flags := cmd.Flags()
