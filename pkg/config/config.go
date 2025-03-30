@@ -7,44 +7,70 @@ import (
 	"github.com/spf13/viper"
 )
 
+// CommonConfig holds configuration options shared between import and export
+type CommonConfig struct {
+	Driver             string
+	Host               string
+	Port               int
+	Username           string
+	Password           string
+	Database           string
+	Tables             []string
+	Filepath           string // Note: Filepath might be less relevant now with folder-path focus
+	Format             string
+	FolderPath         string
+	ExcludeTable       []string
+	ExcludeTableSchema []string
+	ExcludeTableData   []string
+	Storage            string
+	S3Bucket           string
+	S3Region           string
+}
+
+// Config holds the overall application configuration
 type Config struct {
 	Import struct {
-		Driver             string
-		Host               string
-		Port               int
-		Username           string
-		Password           string
-		Database           string
-		Tables             []string
-		Filepath           string
-		Format             string
-		FolderPath         string
-		ExcludeTable       []string
-		ExcludeTableSchema []string
-		ExcludeTableData   []string
-		Storage            string
-		S3Bucket           string
-		S3Region           string
+		CommonConfig
+		// Import-specific fields can go here if any arise
 	}
 	Export struct {
-		Driver             string
-		Host               string
-		Port               int
-		Username           string
-		Password           string
-		Database           string
-		Tables             []string
-		Filepath           string
-		Format             string
-		FolderPath         string
-		ExcludeTable       []string
-		ExcludeTableSchema []string
-		ExcludeTableData   []string
-		Storage            string
-		S3Bucket           string
-		S3Region           string
-		BatchSize          int
+		CommonConfig
+		BatchSize int // Export-specific field
 	}
+}
+
+// loadCommonConfig populates a CommonConfig struct using Viper with a specific prefix.
+func loadCommonConfig(prefix string) CommonConfig {
+	cfg := CommonConfig{}
+	cfg.Driver = getViperString(prefix+"driver", "mysql")
+	cfg.Host = getViperString(prefix+"host", "localhost")
+	cfg.Port = getViperInt(prefix+"port", 3306)
+	cfg.Username = getViperString(prefix+"username", "")
+	cfg.Password = getViperString(prefix+"password", "")
+	cfg.Database = getViperString(prefix+"database", "")
+	cfg.Filepath = getViperString(prefix+"filepath", "") // Keep for potential backward compatibility?
+	cfg.Format = getViperString(prefix+"format", "sql") // Default 'sql' might need adjustment based on context
+	cfg.FolderPath = getViperString(prefix+"folder_path", "")
+	cfg.S3Bucket = getViperString(prefix+"s3_bucket", "")
+	cfg.S3Region = getViperString(prefix+"s3_region", "")
+	cfg.Storage = getViperString(prefix+"storage", "local")
+
+	// Handle tables
+	if tables := getViperString(prefix+"tables", ""); tables != "" {
+		cfg.Tables = strings.Split(tables, ",")
+	}
+
+	// Handle table exclusions
+	if tables := getViperString(prefix+"exclude_table", ""); tables != "" {
+		cfg.ExcludeTable = strings.Split(tables, ",")
+	}
+	if tables := getViperString(prefix+"exclude_table_schema", ""); tables != "" {
+		cfg.ExcludeTableSchema = strings.Split(tables, ",")
+	}
+	if tables := getViperString(prefix+"exclude_table_data", ""); tables != "" {
+		cfg.ExcludeTableData = strings.Split(tables, ",")
+	}
+	return cfg
 }
 
 func LoadConfig() (*Config, error) {
@@ -62,83 +88,36 @@ func LoadConfig() (*Config, error) {
 
 	// Enable environment variable reading
 	viper.AutomaticEnv()
-	viper.SetEnvPrefix("SYNCDB")
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	// No need for SetEnvPrefix("SYNCDB") as we use full keys like "syncdb_import_host"
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_")) // Keep this if you use nested keys in .env
 
 	config := &Config{}
 
-	// Import config
-	config.Import.Driver = getViperString("syncdb_import_driver", "mysql")
-	config.Import.Host = getViperString("syncdb_import_host", "localhost")
-	config.Import.Port = getViperInt("syncdb_import_port", 3306)
-	config.Import.Username = getViperString("syncdb_import_username", "")
-	config.Import.Password = getViperString("syncdb_import_password", "")
-	config.Import.Database = getViperString("syncdb_import_database", "")
-	config.Import.Filepath = getViperString("syncdb_import_filepath", "")
-	config.Import.Format = getViperString("syncdb_import_format", "sql")
-	config.Import.FolderPath = getViperString("syncdb_import_folder_path", "")
-	config.Import.S3Bucket = getViperString("syncdb_import_s3_bucket", "")
-	config.Import.S3Region = getViperString("syncdb_import_s3_region", "")
-	config.Import.Storage = getViperString("syncdb_import_storage", "local")
+	// Load common config for Import and Export using prefixes
+	config.Import.CommonConfig = loadCommonConfig("syncdb_import_")
+	config.Export.CommonConfig = loadCommonConfig("syncdb_export_")
 
-	// Handle import tables
-	if tables := getViperString("syncdb_import_tables", ""); tables != "" {
-		config.Import.Tables = strings.Split(tables, ",")
-	}
-
-	// Handle import table exclusions
-	if tables := getViperString("syncdb_import_exclude_table", ""); tables != "" {
-		config.Import.ExcludeTable = strings.Split(tables, ",")
-	}
-	if tables := getViperString("syncdb_import_exclude_table_schema", ""); tables != "" {
-		config.Import.ExcludeTableSchema = strings.Split(tables, ",")
-	}
-	if tables := getViperString("syncdb_import_exclude_table_data", ""); tables != "" {
-		config.Import.ExcludeTableData = strings.Split(tables, ",")
-	}
-
-	// Export config
-	config.Export.Driver = getViperString("syncdb_export_driver", "mysql")
-	config.Export.Host = getViperString("syncdb_export_host", "localhost")
-	config.Export.Port = getViperInt("syncdb_export_port", 3306)
-	config.Export.Username = getViperString("syncdb_export_username", "")
-	config.Export.Password = getViperString("syncdb_export_password", "")
-	config.Export.Database = getViperString("syncdb_export_database", "")
-	config.Export.Filepath = getViperString("syncdb_export_filepath", "")
-	config.Export.Format = getViperString("syncdb_export_format", "sql")
-	config.Export.FolderPath = getViperString("syncdb_export_folder_path", "")
-	config.Export.S3Bucket = getViperString("syncdb_export_s3_bucket", "")
-	config.Export.S3Region = getViperString("syncdb_export_s3_region", "")
-	config.Export.Storage = getViperString("syncdb_export_storage", "local")
+	// Load export-specific config
 	config.Export.BatchSize = getViperInt("syncdb_export_batch_size", 500)
 
-	// Handle export tables
-	if tables := getViperString("syncdb_export_tables", ""); tables != "" {
-		config.Export.Tables = strings.Split(tables, ",")
+	// Adjust default format for import if needed (common loader defaults to 'sql')
+	if !viper.IsSet("syncdb_import_format") {
+		config.Import.Format = "json" // Set import-specific default if not overridden
 	}
 
-	// Handle export table exclusions
-	if tables := getViperString("syncdb_export_exclude_table", ""); tables != "" {
-		config.Export.ExcludeTable = strings.Split(tables, ",")
-	}
-	if tables := getViperString("syncdb_export_exclude_table_schema", ""); tables != "" {
-		config.Export.ExcludeTableSchema = strings.Split(tables, ",")
-	}
-	if tables := getViperString("syncdb_export_exclude_table_data", ""); tables != "" {
-		config.Export.ExcludeTableData = strings.Split(tables, ",")
-	}
-
-	// Debug output
-	fmt.Printf("Debug: Export Database = %s\n", config.Export.Database)
-	fmt.Printf("Debug: Export Driver = %s\n", config.Export.Driver)
-	fmt.Printf("Debug: Export Host = %s\n", config.Export.Host)
-	fmt.Printf("Debug: Export Port = %d\n", config.Export.Port)
-	fmt.Printf("Debug: Export Tables = %v\n", config.Export.Tables)
-	fmt.Printf("Debug: Export Folder Path = %s\n", config.Export.FolderPath)
-	fmt.Printf("Debug: Export Storage = %s\n", config.Export.Storage)
-	fmt.Printf("Debug: Export S3 Bucket = %s\n", config.Export.S3Bucket)
-	fmt.Printf("Debug: Export S3 Region = %s\n", config.Export.S3Region)
-	fmt.Printf("Debug: Export Batch Size = %d\n", config.Export.BatchSize)
+	// Debug output (optional, adjust as needed)
+	fmt.Printf("Debug: Import Config Loaded: %+v\n", config.Import)
+	fmt.Printf("Debug: Export Config Loaded: %+v\n", config.Export)
+	// fmt.Printf("Debug: Export Database = %s\n", config.Export.Database)
+	// fmt.Printf("Debug: Export Driver = %s\n", config.Export.Driver)
+	// fmt.Printf("Debug: Export Host = %s\n", config.Export.Host)
+	// fmt.Printf("Debug: Export Port = %d\n", config.Export.Port)
+	// fmt.Printf("Debug: Export Tables = %v\n", config.Export.Tables)
+	// fmt.Printf("Debug: Export Folder Path = %s\n", config.Export.FolderPath)
+	// fmt.Printf("Debug: Export Storage = %s\n", config.Export.Storage)
+	// fmt.Printf("Debug: Export S3 Bucket = %s\n", config.Export.S3Bucket)
+	// fmt.Printf("Debug: Export S3 Region = %s\n", config.Export.S3Region)
+	// fmt.Printf("Debug: Export Batch Size = %d\n", config.Export.BatchSize)
 
 	// Note: AWS credentials should be set as environment variables (e.g. AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
 	// or using a shared credentials file (~/.aws/credentials). See https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html

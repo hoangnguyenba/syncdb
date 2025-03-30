@@ -171,117 +171,50 @@ func newImportCommand() *cobra.Command {
 		Use:   "import",
 		Short: "Import database data",
 		Long:  `Import database data from a file.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, cmdLineArgs []string) error { // Renamed original 'args' to 'cmdLineArgs'
 			// Load config from environment
 			cfg, err := config.LoadConfig()
 			if err != nil {
 				return fmt.Errorf("failed to load config: %v", err)
 			}
 
-			// Get flags, use config as defaults
-			host, _ := cmd.Flags().GetString("host")
-			if host == "localhost" { // default value
-				host = cfg.Import.Host
-			}
+			// Populate arguments from flags and config
+			cmdArgs := populateCommonArgsFromFlagsAndConfig(cmd, cfg.Import.CommonConfig) // Use 'cmdArgs'
 
-			port, _ := cmd.Flags().GetInt("port")
-			if port == 3306 { // default value
-				port = cfg.Import.Port
-			}
-
-			username, _ := cmd.Flags().GetString("username")
-			if username == "" {
-				username = cfg.Import.Username
-			}
-
-			password, _ := cmd.Flags().GetString("password")
-			if password == "" {
-				password = cfg.Import.Password
-			}
-
-			dbName, _ := cmd.Flags().GetString("database")
-			if dbName == "" {
-				dbName = cfg.Import.Database
-			}
-
-			dbDriver, _ := cmd.Flags().GetString("driver")
-			if dbDriver == "mysql" { // default value
-				dbDriver = cfg.Import.Driver
-			}
-
-			tables, _ := cmd.Flags().GetStringSlice("tables")
-			if len(tables) == 0 {
-				tables = cfg.Import.Tables
-			}
-
-			filePath, _ := cmd.Flags().GetString("file-path")
-			if filePath == "" {
-				filePath = cfg.Import.Filepath
-			}
-
-			folderPath, _ := cmd.Flags().GetString("folder-path")
-			if folderPath == "" {
-				folderPath = cfg.Import.FolderPath
-			}
-
-			format, _ := cmd.Flags().GetString("format")
-			if format == "json" { // default value
-				format = cfg.Import.Format
-			}
-
+			// Get import-specific flags
 			truncate, _ := cmd.Flags().GetBool("truncate")
-			includeSchema, _ := cmd.Flags().GetBool("include-schema")
-			includeData, _ := cmd.Flags().GetBool("include-data")
-			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
-
-			// Get storage flags
-			storageType, _ := cmd.Flags().GetString("storage")
-			if storageType == "" {
-				storageType = cfg.Import.Storage
-			}
+			filePath := getStringFlagWithConfigFallback(cmd, "file-path", cfg.Import.Filepath) // Use helper for file-path too
 
 			// Initialize storage
 			var store storage.Storage
-			switch storageType {
+			switch cmdArgs.Storage { // Use cmdArgs
 			case "local":
-				store = storage.NewLocalStorage(folderPath)
+				store = storage.NewLocalStorage(cmdArgs.FolderPath) // Use cmdArgs.FolderPath
 			case "s3":
-				s3Bucket, _ := cmd.Flags().GetString("s3-bucket")
-				if s3Bucket == "" {
-					s3Bucket = cfg.Import.S3Bucket
+				if cmdArgs.S3Bucket == "" { // Use cmdArgs
+					return fmt.Errorf("s3-bucket is required when storage is set to s3 (flag or SYNCDB_IMPORT_S3_BUCKET env)")
 				}
-
-				s3Region, _ := cmd.Flags().GetString("s3-region")
-				if s3Region == "" {
-					s3Region = cfg.Import.S3Region
+				if cmdArgs.S3Region == "" { // Use cmdArgs
+					return fmt.Errorf("s3-region is required when storage is set to s3 (flag or SYNCDB_IMPORT_S3_REGION env)")
 				}
-
-				if s3Bucket == "" {
-					return fmt.Errorf("s3-bucket is required when storage is set to s3")
-				}
-				if s3Region == "" {
-					return fmt.Errorf("s3-region is required when storage is set to s3")
-				}
-
-				store = storage.NewS3Storage(s3Bucket, s3Region)
+				store = storage.NewS3Storage(cmdArgs.S3Bucket, cmdArgs.S3Region) // Use cmdArgs.S3Bucket, cmdArgs.S3Region
 				if store == nil {
 					return fmt.Errorf("failed to initialize S3 storage. Please ensure AWS credentials are set in environment")
 				}
 			default:
-				return fmt.Errorf("unsupported storage type: %s", storageType)
+				return fmt.Errorf("unsupported storage type: %s", cmdArgs.Storage) // Use cmdArgs
 			}
 
 			// Validate required values
-			if dbName == "" {
+			if cmdArgs.Database == "" { // Use cmdArgs
 				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_IMPORT_DATABASE env)")
 			}
 
 			// Check if folder path is provided
-			if folderPath != "" {
+			if cmdArgs.FolderPath != "" { // Use cmdArgs
 				var importDir string
-				useZip, _ := cmd.Flags().GetBool("zip")
 
-				if useZip {
+				if cmdArgs.Zip { // Use cmdArgs
 					// Create temporary directory for files
 					importDir, err = os.MkdirTemp("", "syncdb_import_*")
 					if err != nil {
@@ -289,10 +222,10 @@ func newImportCommand() *cobra.Command {
 					}
 					defer os.RemoveAll(importDir) // Clean up temp directory when done
 
-					if storageType == "s3" {
-						fmt.Printf("Searching for latest zip file in S3 with prefix: %s\n", folderPath)
+					if cmdArgs.Storage == "s3" { // Use cmdArgs
+						fmt.Printf("Searching for latest zip file in S3 with prefix: %s\n", cmdArgs.FolderPath) // Use cmdArgs
 						// Find and download latest zip from S3
-						files, err := store.ListObjects(folderPath)
+						files, err := store.ListObjects(cmdArgs.FolderPath) // Use cmdArgs
 						if err != nil {
 							return fmt.Errorf("failed to list objects in S3: %v", err)
 						}
@@ -308,7 +241,7 @@ func newImportCommand() *cobra.Command {
 						}
 
 						if latestZip == "" {
-							return fmt.Errorf("no zip files found in S3 bucket under path: %s", folderPath)
+							return fmt.Errorf("no zip files found in S3 bucket under path: %s", cmdArgs.FolderPath) // Use cmdArgs
 						}
 
 						fmt.Printf("Found latest zip file: %s\n", latestZip)
@@ -376,9 +309,9 @@ func newImportCommand() *cobra.Command {
 							fmt.Printf("Warning: failed to list unzipped files: %v\n", err)
 						}
 						fmt.Println()
-					} else {
+					} else { // Local storage
 						// Find latest zip file locally
-						zipFile, err := getLatestZipFile(folderPath)
+						zipFile, err := getLatestZipFile(cmdArgs.FolderPath) // Use cmdArgs
 						if err != nil {
 							return err
 						}
@@ -431,8 +364,8 @@ func newImportCommand() *cobra.Command {
 						}
 						fmt.Println()
 					}
-				} else {
-					if storageType == "s3" {
+				} else { // Not using zip
+					if cmdArgs.Storage == "s3" { // Use cmdArgs
 						// Create temporary directory for files
 						importDir, err = os.MkdirTemp("", "syncdb_import_*")
 						if err != nil {
@@ -441,7 +374,7 @@ func newImportCommand() *cobra.Command {
 						defer os.RemoveAll(importDir)
 
 						// List files in S3 to find latest timestamp directory
-						files, err := store.ListObjects(folderPath)
+						files, err := store.ListObjects(cmdArgs.FolderPath) // Use cmdArgs
 						if err != nil {
 							return fmt.Errorf("failed to list objects in S3: %v", err)
 						}
@@ -471,7 +404,7 @@ func newImportCommand() *cobra.Command {
 						}
 
 						// Download required files from S3
-						if includeSchema {
+						if cmdArgs.IncludeSchema { // Use cmdArgs
 							schemaData, err := store.Download(fmt.Sprintf("%s/0_schema.sql", latestTimestamp))
 							if err != nil {
 								return fmt.Errorf("failed to download schema from S3: %v", err)
@@ -513,9 +446,9 @@ func newImportCommand() *cobra.Command {
 								return fmt.Errorf("failed to save table file: %v", err)
 							}
 						}
-					} else {
+					} else { // Local storage, not zip
 						// Get latest timestamp directory locally
-						importDir, err = getLatestTimestampDir(folderPath, dbName)
+						importDir, err = getLatestTimestampDir(cmdArgs.FolderPath, cmdArgs.Database) // Use cmdArgs
 						if err != nil {
 							return err
 						}
@@ -523,7 +456,7 @@ func newImportCommand() *cobra.Command {
 				}
 
 				// Initialize database connection
-				database, err := db.InitDB(dbDriver, host, port, username, password, dbName)
+				database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database) // Use cmdArgs
 				if err != nil {
 					return fmt.Errorf("failed to connect to database: %v", err)
 				}
@@ -533,18 +466,19 @@ func newImportCommand() *cobra.Command {
 				conn := &db.Connection{
 					DB: database,
 					Config: db.ConnectionConfig{
-						Driver:   dbDriver,
-						Host:     host,
-						Port:     port,
-						User:     username,
-						Password: password,
-						Database: dbName,
+						Driver:   cmdArgs.Driver, // Use cmdArgs
+						Host:     cmdArgs.Host, // Use cmdArgs
+						Port:     cmdArgs.Port, // Use cmdArgs
+						User:     cmdArgs.Username, // Use cmdArgs
+						Password: cmdArgs.Password, // Use cmdArgs
+						Database: cmdArgs.Database, // Use cmdArgs
 					},
 				}
 
-				// Get tables if not specified
-				if len(tables) == 0 {
-					tables, err = db.GetTables(conn)
+				// Use tables from cmdArgs
+				currentTables := cmdArgs.Tables // Use cmdArgs
+				if len(currentTables) == 0 {
+					currentTables, err = db.GetTables(conn)
 					if err != nil {
 						return fmt.Errorf("failed to get tables: %v", err)
 					}
@@ -552,36 +486,18 @@ func newImportCommand() *cobra.Command {
 
 				// Get table dependencies and sort tables
 				deps := make(map[string][]string)
-				for _, table := range tables {
+				for _, table := range currentTables {
 					deps[table], err = db.GetTableDependencies(conn, table)
 					if err != nil {
 						return fmt.Errorf("failed to get dependencies for table %s: %v", table, err)
 					}
 				}
-				tables = db.SortTablesByDependencies(tables, deps)
+				sortedTables := db.SortTablesByDependencies(currentTables, deps)
 
-				// Handle table exclusions
-				var excludeTables []string
-				var excludeTableSchema []string
-				var excludeTableData []string
-
-				if cmd.Flags().Changed("exclude-table") {
-					excludeTables, _ = cmd.Flags().GetStringSlice("exclude-table")
-				} else {
-					excludeTables = cfg.Import.ExcludeTable
-				}
-
-				if cmd.Flags().Changed("exclude-table-schema") {
-					excludeTableSchema, _ = cmd.Flags().GetStringSlice("exclude-table-schema")
-				} else {
-					excludeTableSchema = cfg.Import.ExcludeTableSchema
-				}
-
-				if cmd.Flags().Changed("exclude-table-data") {
-					excludeTableData, _ = cmd.Flags().GetStringSlice("exclude-table-data")
-				} else {
-					excludeTableData = cfg.Import.ExcludeTableData
-				}
+				// Use exclusion lists from cmdArgs
+				excludeTables := cmdArgs.ExcludeTable // Use cmdArgs
+				excludeTableSchema := cmdArgs.ExcludeTableSchema // Use cmdArgs
+				excludeTableData := cmdArgs.ExcludeTableData // Use cmdArgs
 
 				// Create a map for faster lookup
 				excludeTableMap := make(map[string]bool)
@@ -601,7 +517,7 @@ func newImportCommand() *cobra.Command {
 				}
 
 				// Import schema if requested
-				if includeSchema {
+				if cmdArgs.IncludeSchema { // Use cmdArgs
 					// Read schema file directly
 					schemaFilePath := filepath.Join(importDir, "0_schema.sql")
 					schemaContent, err := os.ReadFile(schemaFilePath)
@@ -619,8 +535,8 @@ func newImportCommand() *cobra.Command {
 				}
 
 				// Truncate tables if requested (regardless of whether schema import is enabled)
-				if truncate {
-					for _, table := range tables {
+				if truncate { // truncate is import-specific, read directly
+					for _, table := range sortedTables {
 						if excludeDataMap[table] {
 							continue
 						}
@@ -650,8 +566,8 @@ func newImportCommand() *cobra.Command {
 				}
 
 				// Import data if requested
-				if includeData {
-					for i, table := range tables {
+				if cmdArgs.IncludeData { // Use cmdArgs
+					for i, table := range sortedTables {
 						if excludeDataMap[table] {
 							continue
 						}
@@ -667,14 +583,14 @@ func newImportCommand() *cobra.Command {
 							}
 						}
 
-						if isView && !includeViewData {
+						if isView && !cmdArgs.IncludeViewData { // Use cmdArgs
 							continue
 						}
 
 						fmt.Printf("\nImporting data for table %s...\n", table)
 
-						// Check if we need to decode base64 values
-						useBase64, _ := cmd.Flags().GetBool("base64")
+						// Use base64 flag from cmdArgs
+						useBase64 := cmdArgs.Base64 // Use cmdArgs
 
 						// Read metadata file to check if export was done with base64
 						metadataFile := filepath.Join(importDir, "0_metadata.json")
@@ -728,19 +644,24 @@ func newImportCommand() *cobra.Command {
 				}
 
 				return nil
-			} else if filePath == "" {
+			} else if filePath == "" { // Check import-specific filePath
 				return fmt.Errorf("either --file-path or --folder-path is required")
 			}
 
-			// If using file-path, continue with existing JSON/SQL file import logic
+			// --- Legacy File Path Import Logic ---
+			// This section handles the older --file-path mechanism.
+			// It might be worth considering deprecating this in favor of the folder-path approach.
+
+			fmt.Printf("Using legacy --file-path import: %s\n", filePath)
+
 			fileData, err := os.ReadFile(filePath)
 			if err != nil {
 				return fmt.Errorf("failed to read file: %v", err)
 			}
 
-			var importData ExportData
+			var importData ExportData // Assuming ExportData struct is still relevant here
 
-			switch format {
+			switch cmdArgs.Format { // Use cmdArgs.Format
 			case "json":
 				if err := json.Unmarshal(fileData, &importData); err != nil {
 					return fmt.Errorf("failed to parse JSON import file: %v", err)
@@ -831,11 +752,11 @@ func newImportCommand() *cobra.Command {
 					importData.Data[tableName] = append(importData.Data[tableName], rowData)
 				}
 			default:
-				return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", format)
+				return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", cmdArgs.Format) // Use cmdArgs
 			}
 
 			// Initialize database connection
-			database, err := db.InitDB(dbDriver, host, port, username, password, dbName)
+			database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database) // Use cmdArgs
 			if err != nil {
 				return fmt.Errorf("failed to connect to database: %v", err)
 			}
@@ -845,35 +766,35 @@ func newImportCommand() *cobra.Command {
 			conn := &db.Connection{
 				DB: database,
 				Config: db.ConnectionConfig{
-					Driver:   dbDriver,
-					Host:     host,
-					Port:     port,
-					User:     username,
-					Password: password,
-					Database: dbName,
+					Driver:   cmdArgs.Driver, // Use cmdArgs
+					Host:     cmdArgs.Host, // Use cmdArgs
+					Port:     cmdArgs.Port, // Use cmdArgs
+					User:     cmdArgs.Username, // Use cmdArgs
+					Password: cmdArgs.Password, // Use cmdArgs
+					Database: cmdArgs.Database, // Use cmdArgs
 				},
 			}
 
-			// Get base64 flag and check if it's set in metadata (for JSON format)
-			useBase64, _ := cmd.Flags().GetBool("base64")
-			if format == "json" && importData.Metadata.Base64 && !useBase64 {
+			// Get base64 flag from cmdArgs and check if it's set in metadata (for JSON format)
+			useBase64 := cmdArgs.Base64 // Use cmdArgs
+			if cmdArgs.Format == "json" && importData.Metadata.Base64 && !useBase64 { // Use cmdArgs
 				fmt.Println("Metadata indicates base64 encoding was used during export. Enabling base64 decoding automatically.")
 				useBase64 = true
 			}
 
 			// Filter tables if specified
-			importTables := importData.Metadata.Tables
-			if len(tables) > 0 {
-				importTables = tables
+			importTables := importData.Metadata.Tables // Use tables from the imported file's metadata
+			if len(cmdArgs.Tables) > 0 { // Override with tables from command line/config if provided // Use cmdArgs
+				importTables = cmdArgs.Tables // Use cmdArgs
 			}
 
-			// Check if data should be imported based on metadata
-			if !importData.Metadata.IncludeData && includeData {
-				return fmt.Errorf("cannot import data: original export did not include data")
+			// Check if data should be imported based on metadata vs flag
+			if !importData.Metadata.IncludeData && cmdArgs.IncludeData { // Use cmdArgs
+				return fmt.Errorf("cannot import data: original export did not include data, but --include-data flag is true")
 			}
 
 			// Skip data import if include-data is false
-			if !includeData {
+			if !cmdArgs.IncludeData { // Use cmdArgs
 				fmt.Println("Skipping data import as --include-data is set to false")
 				return nil
 			}
@@ -887,7 +808,7 @@ func newImportCommand() *cobra.Command {
 				}
 				fmt.Printf("Table %s: %d rows before import\n", table, currentCount)
 
-				// Truncate if requested
+				// Truncate if requested (using import-specific flag)
 				if truncate {
 					if err := db.TruncateTable(conn, table); err != nil {
 						return fmt.Errorf("failed to truncate table %s: %v", table, err)
@@ -901,7 +822,7 @@ func newImportCommand() *cobra.Command {
 				}
 
 				// Check if we need to handle base64 decoding for string values in JSON data
-				if useBase64 && format == "json" {
+				if useBase64 && cmdArgs.Format == "json" { // Use cmdArgs
 					for i, row := range data {
 						for k, v := range row {
 							if strVal, ok := v.(string); ok {
@@ -942,7 +863,7 @@ func newImportCommand() *cobra.Command {
 	}
 
 	// Add shared flags
-	AddSharedFlags(cmd)
+	AddSharedFlags(cmd, true) // Pass true for import command
 
 	// Add import-specific flags
 	flags := cmd.Flags()

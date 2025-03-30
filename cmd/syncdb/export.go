@@ -37,128 +37,26 @@ func newExportCommand() *cobra.Command {
 		Use:   "export",
 		Short: "Export database data",
 		Long:  `Export database data to a file.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, cmdLineArgs []string) error { // Renamed original 'args' to 'cmdLineArgs'
 			// Load config from environment
 			cfg, err := config.LoadConfig()
 			if err != nil {
 				return fmt.Errorf("failed to load config: %v", err)
 			}
 
-			// Get flags, use config as defaults if flags are not explicitly set
-			var host string
-			if cmd.Flags().Changed("host") {
-				host, _ = cmd.Flags().GetString("host")
-			} else {
-				host = cfg.Export.Host
-			}
+			// Populate arguments from flags and config
+			cmdArgs := populateCommonArgsFromFlagsAndConfig(cmd, cfg.Export.CommonConfig) // Use 'cmdArgs'
 
-			var port int
-			if cmd.Flags().Changed("port") {
-				port, _ = cmd.Flags().GetInt("port")
-			} else {
-				port = cfg.Export.Port
-			}
-
-			var username string
-			if cmd.Flags().Changed("username") {
-				username, _ = cmd.Flags().GetString("username")
-			} else {
-				username = cfg.Export.Username
-			}
-
-			var password string
-			if cmd.Flags().Changed("password") {
-				password, _ = cmd.Flags().GetString("password")
-			} else {
-				password = cfg.Export.Password
-			}
-
-			var dbName string
-			if cmd.Flags().Changed("database") {
-				dbName, _ = cmd.Flags().GetString("database")
-			} else {
-				dbName = cfg.Export.Database
-			}
-
-			var dbDriver string
-			if cmd.Flags().Changed("driver") {
-				dbDriver, _ = cmd.Flags().GetString("driver")
-			} else {
-				dbDriver = cfg.Export.Driver
-			}
-
-			var tables []string
-			if cmd.Flags().Changed("tables") {
-				tables, _ = cmd.Flags().GetStringSlice("tables")
-			} else {
-				tables = cfg.Export.Tables
-			}
-
-			var format string
-			if cmd.Flags().Changed("format") {
-				format, _ = cmd.Flags().GetString("format")
-			} else {
-				format = cfg.Export.Format
-			}
-
-			// Get flags
-			includeSchema, _ := cmd.Flags().GetBool("include-schema")
-			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
-			includeData, _ := cmd.Flags().GetBool("include-data")
-
-			// Determine base64 usage
-			useBase64 := false
-			if cmd.Flags().Changed("base64") {
-				useBase64, _ = cmd.Flags().GetBool("base64")
-			}
-
-			// Get folder path, default to database name if not provided
-			var folderPath string
-			if cmd.Flags().Changed("folder-path") {
-				folderPath, _ = cmd.Flags().GetString("folder-path")
-			} else {
-				folderPath = ""
-			}
-
-			// Get storage options
-			var storageType string
-			if cmd.Flags().Changed("storage") {
-				storageType, _ = cmd.Flags().GetString("storage")
-			} else {
-				storageType = cfg.Export.Storage
-			}
-
-			var s3Bucket string
-			if cmd.Flags().Changed("s3-bucket") {
-				s3Bucket, _ = cmd.Flags().GetString("s3-bucket")
-			} else {
-				s3Bucket = cfg.Export.S3Bucket
-			}
-
-			var s3Region string
-			if cmd.Flags().Changed("s3-region") {
-				s3Region, _ = cmd.Flags().GetString("s3-region")
-			} else {
-				s3Region = cfg.Export.S3Region
-			}
-
-			// Get batch size
-			var batchSize int
-			if cmd.Flags().Changed("batch-size") {
-				batchSize, _ = cmd.Flags().GetInt("batch-size")
-			} else if cfg.Export.BatchSize > 0 {
-				batchSize = cfg.Export.BatchSize
-			} else {
-				batchSize = 500 // Default batch size
-			}
+			// Get export-specific flags/config
+			batchSize := getIntFlagWithConfigFallback(cmd, "batch-size", cfg.Export.BatchSize)
 
 			// Validate required values
-			if dbName == "" {
+			if cmdArgs.Database == "" { // Use cmdArgs
 				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_EXPORT_DATABASE env)")
 			}
 
 			// Initialize database connection
-			database, err := db.InitDB(dbDriver, host, port, username, password, dbName)
+			database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database) // Use cmdArgs
 			if err != nil {
 				return fmt.Errorf("failed to connect to database: %v", err)
 			}
@@ -168,18 +66,19 @@ func newExportCommand() *cobra.Command {
 			conn := &db.Connection{
 				DB: database,
 				Config: db.ConnectionConfig{
-					Driver:   dbDriver,
-					Host:     host,
-					Port:     port,
-					User:     username,
-					Password: password,
-					Database: dbName,
+					Driver:   cmdArgs.Driver, // Use cmdArgs
+					Host:     cmdArgs.Host, // Use cmdArgs
+					Port:     cmdArgs.Port, // Use cmdArgs
+					User:     cmdArgs.Username, // Use cmdArgs
+					Password: cmdArgs.Password, // Use cmdArgs
+					Database: cmdArgs.Database, // Use cmdArgs
 				},
 			}
 
-			// Get tables if not specified
-			if len(tables) == 0 {
-				tables, err = db.GetTables(conn)
+			// Use tables from cmdArgs
+			currentTables := cmdArgs.Tables // Use cmdArgs
+			if len(currentTables) == 0 {
+				currentTables, err = db.GetTables(conn)
 				if err != nil {
 					return fmt.Errorf("failed to get tables: %v", err)
 				}
@@ -187,36 +86,18 @@ func newExportCommand() *cobra.Command {
 
 			// Get table dependencies and sort tables
 			deps := make(map[string][]string)
-			for _, table := range tables {
+			for _, table := range currentTables {
 				deps[table], err = db.GetTableDependencies(conn, table)
 				if err != nil {
 					return fmt.Errorf("failed to get dependencies for table %s: %v", table, err)
 				}
 			}
-			tables = db.SortTablesByDependencies(tables, deps)
+			sortedTables := db.SortTablesByDependencies(currentTables, deps)
 
-			// Handle table exclusions
-			var excludeTables []string
-			var excludeTableSchema []string
-			var excludeTableData []string
-
-			if cmd.Flags().Changed("exclude-table") {
-				excludeTables, _ = cmd.Flags().GetStringSlice("exclude-table")
-			} else {
-				excludeTables = cfg.Export.ExcludeTable
-			}
-
-			if cmd.Flags().Changed("exclude-table-schema") {
-				excludeTableSchema, _ = cmd.Flags().GetStringSlice("exclude-table-schema")
-			} else {
-				excludeTableSchema = cfg.Export.ExcludeTableSchema
-			}
-
-			if cmd.Flags().Changed("exclude-table-data") {
-				excludeTableData, _ = cmd.Flags().GetStringSlice("exclude-table-data")
-			} else {
-				excludeTableData = cfg.Export.ExcludeTableData
-			}
+			// Use exclusion lists from cmdArgs
+			excludeTables := cmdArgs.ExcludeTable // Use cmdArgs
+			excludeTableSchema := cmdArgs.ExcludeTableSchema // Use cmdArgs
+			excludeTableData := cmdArgs.ExcludeTableData // Use cmdArgs
 
 			// Create a map for faster lookup
 			excludeTableMap := make(map[string]bool)
@@ -237,19 +118,19 @@ func newExportCommand() *cobra.Command {
 
 			// Filter out fully excluded tables
 			var filteredTables []string
-			for _, t := range tables {
+			for _, t := range sortedTables { // Use sortedTables here
 				if !excludeTableMap[t] {
 					filteredTables = append(filteredTables, t)
 				}
 			}
-			tables = filteredTables
+			finalTables := filteredTables // Rename for clarity
 
 			// Create timestamp for folder
 			timestamp := time.Now().Format("20060102_150405")
-			exportPath := filepath.Join(folderPath, timestamp)
+			exportPath := filepath.Join(cmdArgs.FolderPath, timestamp) // Use cmdArgs.FolderPath
 
-			// Get zip flag
-			createZip, _ := cmd.Flags().GetBool("zip")
+			// Use zip flag from cmdArgs
+			createZip := cmdArgs.Zip // Use cmdArgs
 
 			// Create directory structure
 			if err = os.MkdirAll(exportPath, 0755); err != nil {
@@ -268,18 +149,18 @@ func newExportCommand() *cobra.Command {
 					Base64       bool      `json:"base64"`
 				}{
 					ExportedAt:   time.Now(),
-					DatabaseName: dbName,
-					Tables:       tables,
-					Schema:       includeSchema,
-					ViewData:     includeViewData,
-					IncludeData:  includeData,
-					Base64:       false, // Explicitly set to false
+					DatabaseName: cmdArgs.Database, // Use cmdArgs.Database
+					Tables:       finalTables,   // Use finalTables
+					Schema:       cmdArgs.IncludeSchema, // Use cmdArgs
+					ViewData:     cmdArgs.IncludeViewData, // Use cmdArgs
+					IncludeData:  cmdArgs.IncludeData, // Use cmdArgs
+					Base64:       cmdArgs.Base64, // Use cmdArgs.Base64
 				},
 				Schema: make(map[string]string),
 				Data:   make(map[string][]map[string]interface{}),
 			}
 
-			fmt.Printf("Starting export of %d tables from database '%s'\n", len(tables), dbName)
+			fmt.Printf("Starting export of %d tables from database '%s'\n", len(finalTables), cmdArgs.Database) // Use cmdArgs
 
 			// Write metadata to a separate file (with 0_ prefix)
 			metadataData, err := json.MarshalIndent(exportData.Metadata, "", "  ")
@@ -292,8 +173,8 @@ func newExportCommand() *cobra.Command {
 			}
 
 			// Export schema if requested
-			if includeSchema {
-				for _, table := range tables {
+			if cmdArgs.IncludeSchema { // Use cmdArgs
+				for _, table := range finalTables {
 					if excludeSchemaMap[table] {
 						continue
 					}
@@ -308,7 +189,7 @@ func newExportCommand() *cobra.Command {
 				// Write schema based on format (with 0_ prefix)
 				var schemaData []byte
 				var schemaFile string
-				if format == "sql" {
+				if cmdArgs.Format == "sql" { // Use cmdArgs
 					// Convert schema map to slice
 					var schemaOutput []string
 					for table, definition := range exportData.Schema {
@@ -330,8 +211,8 @@ func newExportCommand() *cobra.Command {
 			}
 
 			// Export data if requested
-			if includeData {
-				for _, table := range tables {
+			if cmdArgs.IncludeData { // Use cmdArgs
+				for _, table := range finalTables {
 					if excludeDataMap[table] {
 						continue
 					}
@@ -342,7 +223,7 @@ func newExportCommand() *cobra.Command {
 						return fmt.Errorf("failed to check if %s is a view: %v", table, err)
 					}
 
-					if isView && !includeViewData {
+					if isView && !cmdArgs.IncludeViewData { // Use cmdArgs
 						continue
 					}
 
@@ -380,8 +261,8 @@ func newExportCommand() *cobra.Command {
 			}
 
 			// Write data files for each table
-			if includeData {
-				for i, table := range tables {
+			if cmdArgs.IncludeData { // Use cmdArgs
+				for i, table := range finalTables {
 					if excludeDataMap[table] {
 						continue
 					}
@@ -437,12 +318,16 @@ func newExportCommand() *cobra.Command {
 								} else {
 									switch v := val.(type) {
 									case string:
-										if useBase64 {
+										if cmdArgs.Base64 { // Use cmdArgs.Base64
 											// Encode string values to base64 when the flag is enabled
 											encodedValue := base64.StdEncoding.EncodeToString([]byte(v))
 											values[j] = fmt.Sprintf("'%s'", encodedValue)
 										} else {
-											values[j] = fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''"))
+											// Escape single quotes for SQL
+											escapedString := strings.ReplaceAll(v, "'", "''")
+											// Further escape backslashes if needed, depending on SQL dialect/driver behavior
+											// escapedString = strings.ReplaceAll(escapedString, "\\", "\\\\")
+											values[j] = fmt.Sprintf("'%s'", escapedString)
 										}
 									case time.Time:
 										values[j] = fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05"))
@@ -473,11 +358,11 @@ func newExportCommand() *cobra.Command {
 			for _, data := range exportData.Data {
 				totalRecords += len(data)
 			}
-			fmt.Printf("Exported %d tables with a total of %d records\n", len(tables), totalRecords)
+			fmt.Printf("Exported %d tables with a total of %d records\n", len(finalTables), totalRecords)
 
 			// If zip flag is enabled, create a zip file
 			if createZip {
-				zipFileName := filepath.Join(folderPath, timestamp+".zip")
+				zipFileName := filepath.Join(cmdArgs.FolderPath, timestamp+".zip") // Use cmdArgs.FolderPath
 				zipFile, err := os.Create(zipFileName)
 				if err != nil {
 					return fmt.Errorf("failed to create zip file: %v", err)
@@ -540,16 +425,16 @@ func newExportCommand() *cobra.Command {
 				zipWriter.Close()
 
 				// If storage is s3, upload to S3
-				if storageType == "s3" {
-					if s3Bucket == "" {
+				if cmdArgs.Storage == "s3" { // Use cmdArgs
+					if cmdArgs.S3Bucket == "" { // Use cmdArgs
 						return fmt.Errorf("s3-bucket is required when storage is set to s3")
 					}
-					if s3Region == "" {
+					if cmdArgs.S3Region == "" { // Use cmdArgs
 						return fmt.Errorf("s3-region is required when storage is set to s3")
 					}
 
 					// Initialize S3 storage
-					s3Store := storage.NewS3Storage(s3Bucket, s3Region)
+					s3Store := storage.NewS3Storage(cmdArgs.S3Bucket, cmdArgs.S3Region) // Use cmdArgs
 					if s3Store == nil {
 						return fmt.Errorf("failed to initialize S3 storage. Please ensure AWS credentials are set in environment")
 					}
@@ -560,34 +445,45 @@ func newExportCommand() *cobra.Command {
 						return fmt.Errorf("failed to read zip file for S3 upload: %v", err)
 					}
 
-					s3Key := filepath.Join(folderPath, filepath.Base(zipFileName))
+					s3Key := filepath.Join(cmdArgs.FolderPath, filepath.Base(zipFileName)) // Use cmdArgs.FolderPath
 					if err := s3Store.Upload(zipData, s3Key); err != nil {
 						return fmt.Errorf("failed to upload zip file to S3: %v", err)
 					}
 
-					fmt.Printf("Uploaded %s to s3://%s/%s\n", zipFileName, s3Bucket, s3Key)
+					fmt.Printf("Uploaded %s to s3://%s/%s\n", zipFileName, cmdArgs.S3Bucket, s3Key) // Use cmdArgs.S3Bucket
 
 					// Clean up the exported directory after successful zip creation
+					// Clean up the local exported directory after successful zip creation and S3 upload
 					if err := os.RemoveAll(exportPath); err != nil {
-						fmt.Printf("Warning: failed to clean up export directory: %v\n", err)
+						fmt.Printf("Warning: failed to clean up export directory %s: %v\n", exportPath, err)
+					}
+					// Clean up the local zip file
+					if err := os.Remove(zipFileName); err != nil {
+						fmt.Printf("Warning: failed to clean up zip file %s: %v\n", zipFileName, err)
+					}
+				} else { // Local storage with zip
+					fmt.Printf("Created zip archive: %s\n", zipFileName)
+					// Clean up the exported directory after successful zip creation
+					if err := os.RemoveAll(exportPath); err != nil {
+						fmt.Printf("Warning: failed to clean up export directory %s: %v\n", exportPath, err)
 					}
 				}
-			} else if storageType == "s3" {
+			} else if cmdArgs.Storage == "s3" { // Not zipping, but using S3 // Use cmdArgs
 				// If not zipping but using S3 storage, upload individual files
-				if s3Bucket == "" {
+				if cmdArgs.S3Bucket == "" { // Use cmdArgs
 					return fmt.Errorf("s3-bucket is required when storage is set to s3")
 				}
-				if s3Region == "" {
+				if cmdArgs.S3Region == "" { // Use cmdArgs
 					return fmt.Errorf("s3-region is required when storage is set to s3")
 				}
 
 				// Initialize S3 storage
-				s3Store := storage.NewS3Storage(s3Bucket, s3Region)
+				s3Store := storage.NewS3Storage(cmdArgs.S3Bucket, cmdArgs.S3Region) // Use cmdArgs
 				if s3Store == nil {
 					return fmt.Errorf("failed to initialize S3 storage. Please ensure AWS credentials are set in environment")
 				}
 
-				// Upload files to S3
+				// Upload individual files to S3
 				err = filepath.Walk(exportPath, func(path string, info os.FileInfo, err error) error {
 					if err != nil {
 						return err
@@ -605,12 +501,14 @@ func newExportCommand() *cobra.Command {
 					}
 					defer file.Close()
 
-					// Create S3 key (path relative to exportPath, include folder path)
-					relPath, err := filepath.Rel(exportPath, path)
+					// Create S3 key (path relative to exportPath base, include folder path and timestamp)
+					relPath, err := filepath.Rel(filepath.Dir(exportPath), path) // Relative to parent of timestamp dir
 					if err != nil {
 						return fmt.Errorf("failed to get relative path for %s: %v", path, err)
 					}
-					s3Key := filepath.Join(folderPath, timestamp, relPath)
+					// Ensure S3 key structure includes the base folder path if provided
+					s3KeyBase := cmdArgs.FolderPath // Use cmdArgs
+					s3Key := filepath.Join(s3KeyBase, relPath) // Joins folderPath + timestamp/file.sql
 
 					// Upload to S3
 					fileData, err := io.ReadAll(file)
@@ -619,10 +517,10 @@ func newExportCommand() *cobra.Command {
 					}
 
 					if err := s3Store.Upload(fileData, s3Key); err != nil {
-						return fmt.Errorf("failed to upload file %s to S3: %v", path, err)
+						return fmt.Errorf("failed to upload file %s to S3 key %s: %v", path, s3Key, err)
 					}
 
-					fmt.Printf("Uploaded %s to s3://%s/%s\n", path, s3Bucket, s3Key)
+					fmt.Printf("Uploaded %s to s3://%s/%s\n", path, cmdArgs.S3Bucket, s3Key) // Use cmdArgs.S3Bucket
 					return nil
 				})
 
@@ -630,21 +528,22 @@ func newExportCommand() *cobra.Command {
 					return fmt.Errorf("failed to upload files to S3: %v", err)
 				}
 
-				fmt.Printf("Successfully uploaded all files to S3 bucket: %s\n", s3Bucket)
+				fmt.Printf("Successfully uploaded all files to S3 bucket: %s\n", cmdArgs.S3Bucket) // Use cmdArgs.S3Bucket
 
-				// Clean up the exported directory after successful S3 upload
+				// Clean up the local exported directory after successful S3 upload
 				if err := os.RemoveAll(exportPath); err != nil {
-					fmt.Printf("Warning: failed to clean up export directory: %v\n", err)
+					fmt.Printf("Warning: failed to clean up export directory %s: %v\n", exportPath, err)
 				}
+			} else { // Local storage, no zip
+				fmt.Printf("Successfully exported %d tables to %s\n", len(finalTables), exportPath)
 			}
 
-			fmt.Printf("Successfully exported %d tables to %s\n", len(tables), exportPath)
 			return nil
 		},
 	}
 
 	// Add shared flags
-	AddSharedFlags(cmd)
+	AddSharedFlags(cmd, false) // Pass false for export command
 
 	// Add export-specific flags
 	flags := cmd.Flags()
