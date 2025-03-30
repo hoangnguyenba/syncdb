@@ -23,6 +23,7 @@ type ExportData struct {
 		Tables       []string  `json:"tables"`
 		Schema       bool      `json:"include_schema"`
 		ViewData     bool      `json:"include_view_data"`
+		IncludeData  bool      `json:"include_data"`
 	} `json:"metadata"`
 	Schema map[string]string                   `json:"schema,omitempty"`
 	Data   map[string][]map[string]interface{} `json:"data"`
@@ -95,6 +96,14 @@ func newExportCommand() *cobra.Command {
 				format, _ = cmd.Flags().GetString("format")
 			} else {
 				format = cfg.Export.Format
+			}
+
+			// Get include-data flag
+			var includeData bool
+			if cmd.Flags().Changed("include-data") {
+				includeData, _ = cmd.Flags().GetBool("include-data")
+			} else {
+				includeData = true  // default is true
 			}
 
 			// Get folder path, default to database name if not provided
@@ -217,11 +226,24 @@ func newExportCommand() *cobra.Command {
 
 			// Initialize export data structure for metadata
 			exportData := ExportData{
-				Data: make(map[string][]map[string]interface{}),
+				Metadata: struct {
+					ExportedAt   time.Time `json:"exported_at"`
+					DatabaseName string    `json:"database_name"`
+					Tables       []string  `json:"tables"`
+					Schema       bool      `json:"include_schema"`
+					ViewData     bool      `json:"include_view_data"`
+					IncludeData  bool      `json:"include_data"`
+				}{
+					ExportedAt:   time.Now(),
+					DatabaseName: dbName,
+					Tables:       tables,
+					Schema:       false,
+					ViewData:     false,
+					IncludeData:  includeData,
+				},
+				Schema: make(map[string]string),
+				Data:   make(map[string][]map[string]interface{}),
 			}
-			exportData.Metadata.ExportedAt = time.Now()
-			exportData.Metadata.DatabaseName = dbName
-			exportData.Metadata.Tables = tables
 
 			fmt.Printf("Starting export of %d tables from database '%s'\n", len(tables), dbName)
 
@@ -238,7 +260,6 @@ func newExportCommand() *cobra.Command {
 			// Get schema if requested
 			includeSchema, _ := cmd.Flags().GetBool("include-schema")
 			if includeSchema {
-				exportData.Schema = make(map[string]string)
 				var schemaOutput []string
 				for _, table := range tables {
 					// Skip schema for excluded tables
@@ -301,6 +322,11 @@ func newExportCommand() *cobra.Command {
 
 				// Skip data for excluded tables
 				if excludeDataMap[table] {
+					continue
+				}
+
+				// Skip data if include-data is false
+				if !includeData {
 					continue
 				}
 
@@ -584,6 +610,7 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().String("folder-path", "", "Folder path for export")
 	cmd.Flags().Bool("include-schema", false, "Include schema in export")
 	cmd.Flags().Bool("include-view-data", false, "Include view data in export")
+	cmd.Flags().Bool("include-data", true, "Include data in export (default: true)")
 	cmd.Flags().Bool("zip", false, "Create zip archive")
 	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude from export (comma-separated)")
 	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema from export (comma-separated)")

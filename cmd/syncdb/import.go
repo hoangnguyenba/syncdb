@@ -775,6 +775,14 @@ func newImportCommand() *cobra.Command {
 				importTables = tables
 			}
 
+			// Get include-data flag
+			includeData, _ := cmd.Flags().GetBool("include-data")
+
+			// Check if data should be imported based on metadata
+			if !importData.Metadata.IncludeData && includeData {
+				return fmt.Errorf("cannot import data: original export did not include data")
+			}
+
 			// Import data for each table
 			for _, table := range importTables {
 				// Get current row count
@@ -834,6 +842,7 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().String("storage", "local", "Storage type (local, s3)")
 	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
 	cmd.Flags().String("s3-region", "", "S3 region")
+	cmd.Flags().Bool("include-data", true, "Import data from export (default: true)")
 
 	return cmd
 }

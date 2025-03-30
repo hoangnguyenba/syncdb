@@ -65,6 +65,12 @@ syncdb export \
   --include-schema \
   --folder-path ./backups
 
+# Export without data
+syncdb export \
+  --database mydb \
+  --include-data=false \
+  --folder-path ./backups
+
 # Export with condition
 syncdb export \
   --database mydb \
@@ -163,6 +169,7 @@ syncdb import \
 ### Export Settings
 
 - `--include-schema`: Include database schema in export
+- `--include-data`: Include data in export (default: true)
 - `--condition`: WHERE condition for filtering data during export
 - `--folder-path`: Base folder path for export (default: database name)
 - `--format`: Output format (json, sql) (default: "sql")
