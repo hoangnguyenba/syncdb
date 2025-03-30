@@ -355,11 +355,61 @@ func newExportCommand() *cobra.Command {
 					}
 
 					exportData.Data[table] = data
-					fmt.Println("done")
+					fmt.Printf("done (%d records)\n", len(data))
 				}
 			}
 
-			fmt.Printf("Exported %d tables with a total of %d records\n", len(tables), len(exportData.Data))
+			// Write data files for each table
+			if includeData {
+				for i, table := range tables {
+					if excludeDataMap[table] {
+						continue
+					}
+
+					data, ok := exportData.Data[table]
+					if !ok {
+						continue
+					}
+
+					// Convert data to SQL format
+					var sqlStatements []string
+					for _, row := range data {
+						columns := make([]string, 0, len(row))
+						values := make([]string, 0, len(row))
+						for col, val := range row {
+							columns = append(columns, col)
+							switch v := val.(type) {
+							case nil:
+								values = append(values, "NULL")
+							case string:
+								values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+							case time.Time:
+								values = append(values, fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05")))
+							default:
+								values = append(values, fmt.Sprintf("%v", v))
+							}
+						}
+						sqlStatements = append(sqlStatements, fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);",
+							table,
+							strings.Join(columns, ", "),
+							strings.Join(values, ", ")))
+					}
+
+					// Write data to file
+					dataFile := filepath.Join(exportPath, fmt.Sprintf("%d_%s.sql", i+1, table))
+					if err := os.WriteFile(dataFile, []byte(strings.Join(sqlStatements, "\n")), 0644); err != nil {
+						return fmt.Errorf("failed to write data file for table %s: %v", table, err)
+					}
+					fmt.Printf("Wrote %d records to %s\n", len(data), dataFile)
+				}
+			}
+
+			// Calculate total records
+			totalRecords := 0
+			for _, data := range exportData.Data {
+				totalRecords += len(data)
+			}
+			fmt.Printf("Exported %d tables with a total of %d records\n", len(tables), totalRecords)
 
 			// If zip flag is enabled, create a zip file
 			if createZip {
