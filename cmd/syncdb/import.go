@@ -574,7 +574,7 @@ func newImportCommand() *cobra.Command {
 					}
 
 					// Split schema into individual statements
-					schemaStatements := strings.Split(string(schemaData), ";")
+					schemaStatements := strings.Split(string(schemaData), ";\n\n")
 					for _, stmt := range schemaStatements {
 						stmt = strings.TrimSpace(stmt)
 						if stmt == "" {
