@@ -46,7 +46,7 @@ SYNCDB_IMPORT_PORT=3306
 SYNCDB_IMPORT_USERNAME=root
 SYNCDB_IMPORT_PASSWORD=example
 SYNCDB_IMPORT_DATABASE=commercedb
-SYNCDB_IMPORT_TABLES=sphm_batch,sphm_payment_gateway_config
+SYNCDB_IMPORT_TABLES=users,products
 SYNCDB_IMPORT_FILEPATH=backup.json
 SYNCDB_IMPORT_FOLDER_PATH=backup
 SYNCDB_IMPORT_FORMAT=json
@@ -67,7 +67,7 @@ SYNCDB_EXPORT_PORT=3306
 SYNCDB_EXPORT_USERNAME=root
 SYNCDB_EXPORT_PASSWORD=example
 SYNCDB_EXPORT_DATABASE=commercedb
-SYNCDB_EXPORT_TABLES=sphm_batch,sphm_payment_gateway_config
+SYNCDB_EXPORT_TABLES=users,products
 SYNCDB_EXPORT_FILEPATH=backup.json
 SYNCDB_EXPORT_FOLDER_PATH=backup
 SYNCDB_EXPORT_FORMAT=json
@@ -88,11 +88,10 @@ Export data with schema to a timestamped folder:
 This will create a directory structure like:
 ```
 backup/
-  └── commercedb/              # Database name
-      ├── 20250329_150405/    # Timestamp (YYYYMMDD_HHMMSS)
-      │   └── backup.json
-      └── 20250328_103000/
-          └── backup.json
+  ├── 20250329_150405/    # Timestamp (YYYYMMDD_HHMMSS)
+  │   └── backup.json
+  └── 20250328_103000/
+      └── backup.json
 ```
 
 ### Import Data
