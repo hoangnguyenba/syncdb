@@ -636,7 +636,7 @@ func newImportCommand() *cobra.Command {
 					}
 
 					// Split into individual statements
-					statements := strings.Split(string(tableData), "\n")
+					statements := strings.Split(string(tableData), "\n\n")
 					var recordCount int
 					for _, stmt := range statements {
 						stmt = strings.TrimSpace(stmt)
@@ -675,7 +675,7 @@ func newImportCommand() *cobra.Command {
 				}
 			case "sql":
 				// Parse SQL file
-				sqlStatements := strings.Split(string(fileData), "\n")
+				sqlStatements := strings.Split(string(fileData), "\n\n")
 				importData = ExportData{
 					Data: make(map[string][]map[string]interface{}),
 				}

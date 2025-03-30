@@ -279,6 +279,12 @@ func newExportCommand() *cobra.Command {
 			// Get include-view-data flag
 			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
 
+			// Add new flag for records per batch
+			recordsPerBatch, _ := cmd.Flags().GetInt("records-per-batch")
+			if recordsPerBatch == 0 {
+				recordsPerBatch = 500 // Default value
+			}
+
 			// Export data for each table to separate files
 			var totalRecords int
 			for i, table := range tables {
@@ -324,48 +330,67 @@ func newExportCommand() *cobra.Command {
 						break
 					}
 
-					for _, row := range data {
-						values := make([]string, 0, len(orderedColumns))
-						for _, col := range orderedColumns {
-							val := row[col] // Use the escaped column name directly since that's what we store in the map
-							if val == nil {
-								values = append(values, "NULL")
-							} else {
-								switch v := val.(type) {
-								case string:
-									values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
-								case time.Time:
-									values = append(values, fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05")))
-								case map[string]interface{}, []interface{}:
-									jsonBytes, err := json.Marshal(v)
-									if err != nil {
-										return fmt.Errorf("failed to marshal JSON value: %v", err)
-									}
-									jsonStr := string(jsonBytes)
-									values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(jsonStr, "'", "''")))
-								case float64:
-									values = append(values, fmt.Sprintf("%f", v))
-								case int64:
-									values = append(values, fmt.Sprintf("%d", v))
-								case bool:
-									if v {
-										values = append(values, "1")
-									} else {
-										values = append(values, "0")
-									}
-								default:
-									values = append(values, fmt.Sprintf("%v", v))
-								}
-							}
+					// Batch records
+					for j := 0; j < len(data); j += recordsPerBatch {
+						end := j + recordsPerBatch
+						if end > len(data) {
+							end = len(data)
 						}
+						batchData := data[j:end]
 
-						stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);",
-							table,
-							strings.Join(orderedColumns, ", "),
-							strings.Join(values, ", "))
-						sqlStatements = append(sqlStatements, stmt)
+						// Prepare bulk insert for the batch
+						if len(batchData) > 0 {
+							// Prepare values for bulk insert
+							var valueStrings []string
+							for _, row := range batchData {
+								values := make([]string, 0, len(orderedColumns))
+								for _, col := range orderedColumns {
+									val := row[col]
+									if val == nil {
+										values = append(values, "NULL")
+									} else {
+										switch v := val.(type) {
+										case string:
+											values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+										case time.Time:
+											values = append(values, fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05")))
+										case map[string]interface{}, []interface{}:
+											jsonBytes, err := json.Marshal(v)
+											if err != nil {
+												return fmt.Errorf("failed to marshal JSON value: %v", err)
+											}
+											jsonStr := string(jsonBytes)
+											values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(jsonStr, "'", "''")))
+										case float64:
+											values = append(values, fmt.Sprintf("%f", v))
+										case int64:
+											values = append(values, fmt.Sprintf("%d", v))
+										case bool:
+											if v {
+												values = append(values, "1")
+											} else {
+												values = append(values, "0")
+											}
+										default:
+											values = append(values, fmt.Sprintf("%v", v))
+										}
+									}
+								}
+								valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(values, ", ")))
+							}
+
+							// Construct bulk insert statement
+							stmt := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES\n%s;",
+								table,
+								strings.Join(orderedColumns, ", "),
+								strings.Join(valueStrings, ",\n"))
+							sqlStatements = append(sqlStatements, stmt)
+						}
+						
+						// Add an extra newline between batches
+						sqlStatements = append(sqlStatements, "")
 					}
-					outputData = []byte(strings.Join(sqlStatements, "\n") + "\n")
+					outputData = []byte(strings.Join(sqlStatements, "\n"))
 				default:
 					return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", format)
 				}
@@ -566,6 +591,7 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().String("storage", "", "Storage type (local or s3)")
 	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
 	cmd.Flags().String("s3-region", "", "S3 region")
+	cmd.Flags().Int("records-per-batch", 500, "Number of records to export per batch")
 
 	return cmd
 }
