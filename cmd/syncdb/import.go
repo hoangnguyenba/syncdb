@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -228,9 +229,9 @@ func newImportCommand() *cobra.Command {
 			}
 
 			truncate, _ := cmd.Flags().GetBool("truncate")
-			upsert, _ := cmd.Flags().GetBool("upsert")
 			includeSchema, _ := cmd.Flags().GetBool("include-schema")
 			includeData, _ := cmd.Flags().GetBool("include-data")
+			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
 
 			// Get storage flags
 			storageType, _ := cmd.Flags().GetString("storage")
@@ -451,14 +452,14 @@ func newImportCommand() *cobra.Command {
 							if !strings.HasSuffix(file, ".sql") && !strings.HasSuffix(file, ".json") {
 								continue
 							}
-							
+
 							// Extract timestamp from file path
 							parts := strings.Split(file, "/")
 							if len(parts) < 2 {
 								continue
 							}
 							timestamp := parts[len(parts)-2]
-							
+
 							if latestTimestamp == "" || timestamp > latestTimestamp {
 								latestTimestamp = timestamp
 							}
@@ -493,8 +494,8 @@ func newImportCommand() *cobra.Command {
 							ExportedAt   time.Time `json:"exported_at"`
 							DatabaseName string    `json:"database_name"`
 							Tables       []string  `json:"tables"`
-							Schema      bool      `json:"include_schema"`
-							ViewData    bool      `json:"include_view_data"`
+							Schema       bool      `json:"include_schema"`
+							ViewData     bool      `json:"include_view_data"`
 						}
 						if err := json.Unmarshal(metadataData, &metadata); err != nil {
 							return fmt.Errorf("failed to parse metadata file: %v", err)
@@ -525,6 +526,37 @@ func newImportCommand() *cobra.Command {
 					return fmt.Errorf("failed to connect to database: %v", err)
 				}
 				defer database.Close()
+
+				// Create a Connection instance
+				conn := &db.Connection{
+					DB: database,
+					Config: db.ConnectionConfig{
+						Driver:   dbDriver,
+						Host:     host,
+						Port:     port,
+						User:     username,
+						Password: password,
+						Database: dbName,
+					},
+				}
+
+				// Get tables if not specified
+				if len(tables) == 0 {
+					tables, err = db.GetTables(conn)
+					if err != nil {
+						return fmt.Errorf("failed to get tables: %v", err)
+					}
+				}
+
+				// Get table dependencies and sort tables
+				deps := make(map[string][]string)
+				for _, table := range tables {
+					deps[table], err = db.GetTableDependencies(conn, table)
+					if err != nil {
+						return fmt.Errorf("failed to get dependencies for table %s: %v", table, err)
+					}
+				}
+				tables = db.SortTablesByDependencies(tables, deps)
 
 				// Handle table exclusions
 				var excludeTables []string
@@ -568,100 +600,76 @@ func newImportCommand() *cobra.Command {
 
 				// Import schema if requested
 				if includeSchema {
-					schemaPath := filepath.Join(importDir, "0_schema.sql")
-					schemaData, err := os.ReadFile(schemaPath)
-					if err != nil {
-						return fmt.Errorf("failed to read schema file: %v", err)
-					}
-
-					// Split schema into individual statements
-					schemaStatements := strings.Split(string(schemaData), ";\n\n")
-					for _, stmt := range schemaStatements {
-						stmt = strings.TrimSpace(stmt)
-						if stmt == "" {
+					for _, table := range tables {
+						if excludeSchemaMap[table] {
 							continue
 						}
 
-						// Skip schema for excluded tables
-						tableName := extractTableNameFromSchema(stmt)
-						if tableName != "" && excludeSchemaMap[tableName] {
+						// Get schema for table
+						_, err := db.GetTableSchema(conn, table)
+						if err != nil {
+							return fmt.Errorf("failed to get schema for table %s: %v", table, err)
+						}
+
+						if err := db.TruncateTable(conn, table); err != nil {
+							return fmt.Errorf("failed to truncate table %s: %v", table, err)
+						}
+
+						// Create a buffer to store the data
+						var buf bytes.Buffer
+						if err := db.ImportTableData(conn, table, &buf); err != nil {
+							return fmt.Errorf("failed to import data for table %s: %v", table, err)
+						}
+					}
+				}
+
+				// Import data if requested
+				if includeData {
+					for i, table := range tables {
+						if excludeDataMap[table] {
 							continue
 						}
 
-						if _, err := database.Exec(stmt); err != nil {
-							return fmt.Errorf("failed to execute schema statement: %v", err)
+						// Check if it's a view
+						isView, err := db.IsView(conn, table)
+						if err != nil {
+							return fmt.Errorf("failed to check if %s is a view: %v", table, err)
 						}
-					}
-				}
 
-				// First read metadata file
-				metadataPath := filepath.Join(importDir, "0_metadata.json")
-				metadataData, err := os.ReadFile(metadataPath)
-				if err != nil {
-					return fmt.Errorf("failed to read metadata file: %v", err)
-				}
-
-				var metadata struct {
-					ExportedAt   time.Time `json:"exported_at"`
-					DatabaseName string    `json:"database_name"`
-					Tables       []string  `json:"tables"`
-					Schema      bool      `json:"include_schema"`
-					ViewData    bool      `json:"include_view_data"`
-				}
-
-				if err := json.Unmarshal(metadataData, &metadata); err != nil {
-					return fmt.Errorf("failed to parse metadata file: %v", err)
-				}
-
-				fmt.Printf("Starting import of %d tables into database '%s'\n", len(metadata.Tables), dbName)
-				var totalRecords int
-
-				// Skip data import if include-data is false
-				if !includeData {
-					fmt.Println("Skipping data import as --include-data is set to false")
-					return nil
-				}
-
-				// Import table data
-				for i, table := range metadata.Tables {
-					// Skip tables that are completely excluded
-					if excludeTableMap[table] {
-						continue
-					}
-
-					// Skip tables that are excluded from data import
-					if excludeDataMap[table] {
-						continue
-					}
-
-					fmt.Printf("Importing table '%s'...", table)
-
-					tableFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table))
-					tableData, err := os.ReadFile(tableFile)
-					if err != nil {
-						return fmt.Errorf("failed to read table file %s: %v", table, err)
-					}
-
-					// Split into individual statements
-					statements := strings.Split(string(tableData), "\n\n")
-					var recordCount int
-					for _, stmt := range statements {
-						stmt = strings.TrimSpace(stmt)
-						if stmt == "" || !strings.HasPrefix(strings.ToUpper(stmt), "INSERT") {
+						if isView && !includeViewData {
 							continue
 						}
 
-						if _, err := database.Exec(stmt); err != nil {
-							return fmt.Errorf("failed to execute statement for table %s: %v", table, err)
-						}
-						recordCount++
-					}
+						fmt.Printf("Importing table '%s'...", table)
 
-					totalRecords += recordCount
-					fmt.Printf(" %d records\n", recordCount)
+						// Get current row count
+						rowCount, err := db.GetTableRowCount(conn, table)
+						if err != nil {
+							return fmt.Errorf("failed to get row count for table %s: %v", table, err)
+						}
+
+						// Read table data from file
+						tableFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table))
+						if _, err := os.ReadFile(tableFile); err != nil {
+							return fmt.Errorf("failed to read table file %s: %v", table, err)
+						}
+
+						// Create a buffer to store the data
+						var buf bytes.Buffer
+						if err := db.ImportTableData(conn, table, &buf); err != nil {
+							return fmt.Errorf("failed to import data to table %s: %v", table, err)
+						}
+
+						// Get new row count
+						newRowCount, err := db.GetTableRowCount(conn, table)
+						if err != nil {
+							return fmt.Errorf("failed to get new row count for table %s: %v", table, err)
+						}
+
+						fmt.Printf(" %d records imported\n", newRowCount-rowCount)
+					}
 				}
 
-				fmt.Printf("Imported %d tables with a total of %d records\n", len(metadata.Tables), totalRecords)
 				return nil
 			} else if filePath == "" {
 				return fmt.Errorf("either --file-path or --folder-path is required")
@@ -776,6 +784,19 @@ func newImportCommand() *cobra.Command {
 			}
 			defer database.Close()
 
+			// Create a Connection instance
+			conn := &db.Connection{
+				DB: database,
+				Config: db.ConnectionConfig{
+					Driver:   dbDriver,
+					Host:     host,
+					Port:     port,
+					User:     username,
+					Password: password,
+					Database: dbName,
+				},
+			}
+
 			// Filter tables if specified
 			importTables := importData.Metadata.Tables
 			if len(tables) > 0 {
@@ -796,7 +817,7 @@ func newImportCommand() *cobra.Command {
 			// Import data for each table
 			for _, table := range importTables {
 				// Get current row count
-				currentCount, err := db.GetTableRowCount(database, table)
+				currentCount, err := db.GetTableRowCount(conn, table)
 				if err != nil {
 					return fmt.Errorf("failed to get row count for table %s: %v", table, err)
 				}
@@ -804,7 +825,7 @@ func newImportCommand() *cobra.Command {
 
 				// Truncate if requested
 				if truncate {
-					if err := db.TruncateTable(database, table); err != nil {
+					if err := db.TruncateTable(conn, table); err != nil {
 						return fmt.Errorf("failed to truncate table %s: %v", table, err)
 					}
 				}
@@ -815,12 +836,21 @@ func newImportCommand() *cobra.Command {
 					return fmt.Errorf("table %s not found in import file", table)
 				}
 
-				if err := db.ImportTableData(database, table, data, upsert, dbDriver); err != nil {
+				// Create a buffer to store the data
+				var buf bytes.Buffer
+				encoder := json.NewEncoder(&buf)
+				for _, row := range data {
+					if err := encoder.Encode(row); err != nil {
+						return fmt.Errorf("failed to encode data row for table %s: %v", table, err)
+					}
+				}
+
+				if err := db.ImportTableData(conn, table, &buf); err != nil {
 					return fmt.Errorf("failed to import data to table %s: %v", table, err)
 				}
 
 				// Get final row count
-				finalCount, err := db.GetTableRowCount(database, table)
+				finalCount, err := db.GetTableRowCount(conn, table)
 				if err != nil {
 					return fmt.Errorf("failed to get row count for table %s: %v", table, err)
 				}
@@ -843,8 +873,9 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().String("folder-path", "", "Folder path to import from")
 	cmd.Flags().String("format", "json", "File format (json, sql)")
 	cmd.Flags().Bool("truncate", false, "Truncate tables before import")
-	cmd.Flags().Bool("upsert", false, "Use upsert instead of insert")
 	cmd.Flags().Bool("include-schema", false, "Include schema in import")
+	cmd.Flags().Bool("include-data", true, "Import data from export (default: true)")
+	cmd.Flags().Bool("include-view-data", true, "Include view data in import (default: true)")
 	cmd.Flags().StringSlice("exclude-table", []string{}, "Tables to exclude")
 	cmd.Flags().StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema")
 	cmd.Flags().StringSlice("exclude-table-data", []string{}, "Tables to exclude data")
@@ -852,7 +883,6 @@ func newImportCommand() *cobra.Command {
 	cmd.Flags().String("storage", "local", "Storage type (local, s3)")
 	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
 	cmd.Flags().String("s3-region", "", "S3 region")
-	cmd.Flags().Bool("include-data", true, "Import data from export (default: true)")
 
 	return cmd
 }

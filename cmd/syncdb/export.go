@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -145,20 +146,36 @@ func newExportCommand() *cobra.Command {
 			}
 			defer database.Close()
 
+			// Create a Connection instance
+			conn := &db.Connection{
+				DB: database,
+				Config: db.ConnectionConfig{
+					Driver:   dbDriver,
+					Host:     host,
+					Port:     port,
+					User:     username,
+					Password: password,
+					Database: dbName,
+				},
+			}
+
 			// Get tables if not specified
 			if len(tables) == 0 {
-				tables, err = db.GetTables(database, dbName, dbDriver)
+				tables, err = db.GetTables(conn)
 				if err != nil {
 					return fmt.Errorf("failed to get tables: %v", err)
 				}
 			}
 
 			// Get table dependencies and sort tables
-			dependencies, err := db.GetTableDependencies(database, tables, dbDriver)
-			if err != nil {
-				return fmt.Errorf("failed to get table dependencies: %v", err)
+			deps := make(map[string][]string)
+			for _, table := range tables {
+				deps[table], err = db.GetTableDependencies(conn, table)
+				if err != nil {
+					return fmt.Errorf("failed to get dependencies for table %s: %v", table, err)
+				}
 			}
-			tables = db.SortTablesByDependencies(tables, dependencies)
+			tables = db.SortTablesByDependencies(tables, deps)
 
 			// Handle table exclusions
 			var excludeTables []string
@@ -221,7 +238,7 @@ func newExportCommand() *cobra.Command {
 				return fmt.Errorf("failed to create directory structure: %v", err)
 			}
 
-			// Initialize export data structure for metadata
+			// Create export data structure
 			exportData := ExportData{
 				Metadata: struct {
 					ExportedAt   time.Time `json:"exported_at"`
@@ -254,30 +271,29 @@ func newExportCommand() *cobra.Command {
 				return fmt.Errorf("failed to write metadata file: %v", err)
 			}
 
-			// Get schema if requested
+			// Export schema if requested
 			if includeSchema {
-				var schemaOutput []string
 				for _, table := range tables {
-					// Skip schema for excluded tables
 					if excludeSchemaMap[table] {
 						continue
 					}
 
-					schema, err := db.GetTableSchema(database, table, dbDriver)
+					schema, err := db.GetTableSchema(conn, table)
 					if err != nil {
 						return fmt.Errorf("failed to get schema for table %s: %v", table, err)
 					}
-					exportData.Schema[table] = schema
-					if format == "sql" {
-						schemaOutput = append(schemaOutput, fmt.Sprintf("-- Table structure for %s\n%s\n", table, schema))
-					}
+					exportData.Schema[table] = schema.Definition
 				}
-				exportData.Metadata.Schema = true
 
 				// Write schema based on format (with 0_ prefix)
 				var schemaData []byte
 				var schemaFile string
 				if format == "sql" {
+					// Convert schema map to slice
+					var schemaOutput []string
+					for table, definition := range exportData.Schema {
+						schemaOutput = append(schemaOutput, fmt.Sprintf("-- Table structure for %s\n%s\n", table, definition))
+					}
 					schemaData = []byte(strings.Join(schemaOutput, "\n"))
 					schemaFile = filepath.Join(exportPath, "0_schema.sql")
 				} else {
@@ -293,135 +309,57 @@ func newExportCommand() *cobra.Command {
 				}
 			}
 
-			// Add new flag for records per batch
-			recordsPerBatch, _ := cmd.Flags().GetInt("records-per-batch")
-			if recordsPerBatch == 0 {
-				recordsPerBatch = 500 // Default value
-			}
+			// Export data if requested
+			if includeData {
+				for _, table := range tables {
+					if excludeDataMap[table] {
+						continue
+					}
 
-			// Export data for each table to separate files
-			var totalRecords int
-			for i, table := range tables {
-				// Check if it's a view
-				isView, err := db.IsView(database, table, dbDriver)
-				if err != nil {
-					return fmt.Errorf("failed to check if %s is a view: %v", table, err)
-				}
-
-				// Skip data export for views unless include-view-data is true
-				if isView && !includeViewData {
-					continue
-				}
-
-				// Skip data for excluded tables
-				if excludeDataMap[table] {
-					continue
-				}
-
-				// Skip data if include-data is false
-				if !includeData {
-					continue
-				}
-
-				fmt.Printf("Exporting table '%s'...", table)
-
-				data, orderedColumns, err := db.ExportTableData(database, table, "", dbDriver)
-
-				if err != nil {
-					return fmt.Errorf("failed to export data from table %s: %v", table, err)
-				}
-
-				recordCount := len(data)
-				totalRecords += recordCount
-				fmt.Printf(" %d records\n", recordCount)
-
-				var outputData []byte
-				switch format {
-				case "json":
-					outputData, err = json.MarshalIndent(data, "", "  ")
+					// Check if it's a view
+					isView, err := db.IsView(conn, table)
 					if err != nil {
-						return fmt.Errorf("failed to marshal data: %v", err)
-					}
-				case "sql":
-					var sqlStatements []string
-					// Skip if no data
-					if len(data) == 0 {
-						break
+						return fmt.Errorf("failed to check if %s is a view: %v", table, err)
 					}
 
-					// Batch records
-					for j := 0; j < len(data); j += recordsPerBatch {
-						end := j + recordsPerBatch
-						if end > len(data) {
-							end = len(data)
+					if isView && !includeViewData {
+						continue
+					}
+
+					fmt.Printf("Exporting table '%s'...", table)
+
+					// Create a buffer to store the data
+					var buf bytes.Buffer
+					if err := db.ExportTableData(conn, table, &buf); err != nil {
+						return fmt.Errorf("failed to export data for table %s: %v", table, err)
+					}
+
+					// Decode the data from the buffer
+					var operations []db.DataOperation
+					decoder := json.NewDecoder(&buf)
+					for {
+						var op db.DataOperation
+						if err := decoder.Decode(&op); err == io.EOF {
+							break
 						}
-						batchData := data[j:end]
-
-						// Prepare bulk insert for the batch
-						if len(batchData) > 0 {
-							// Prepare values for bulk insert
-							var valueStrings []string
-							for _, row := range batchData {
-								values := make([]string, 0, len(orderedColumns))
-								for _, col := range orderedColumns {
-									val := row[col]
-									if val == nil {
-										values = append(values, "NULL")
-									} else {
-										switch v := val.(type) {
-										case string:
-											values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
-										case time.Time:
-											values = append(values, fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05")))
-										case map[string]interface{}, []interface{}:
-											jsonBytes, err := json.Marshal(v)
-											if err != nil {
-												return fmt.Errorf("failed to marshal JSON value: %v", err)
-											}
-											jsonStr := string(jsonBytes)
-											values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(jsonStr, "'", "''")))
-										case float64:
-											values = append(values, fmt.Sprintf("%f", v))
-										case int64:
-											values = append(values, fmt.Sprintf("%d", v))
-										case bool:
-											if v {
-												values = append(values, "1")
-											} else {
-												values = append(values, "0")
-											}
-										default:
-											values = append(values, fmt.Sprintf("%v", v))
-										}
-									}
-								}
-								valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(values, ", ")))
-							}
-
-							// Construct bulk insert statement
-							stmt := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES\n%s;",
-								table,
-								strings.Join(orderedColumns, ", "),
-								strings.Join(valueStrings, ",\n"))
-							sqlStatements = append(sqlStatements, stmt)
+						if err != nil {
+							return fmt.Errorf("failed to decode operation for table %s: %v", table, err)
 						}
-						
-						// Add an extra newline between batches
-						sqlStatements = append(sqlStatements, "")
+						operations = append(operations, op)
 					}
-					outputData = []byte(strings.Join(sqlStatements, "\n"))
-				default:
-					return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", format)
-				}
 
-				// Write table data to file with index prefix (starting from 1)
-				tableFile := filepath.Join(exportPath, fmt.Sprintf("%d_%s.%s", i+1, table, format))
-				if err = os.WriteFile(tableFile, outputData, 0644); err != nil {
-					return fmt.Errorf("failed to write table file %s: %v", table, err)
+					// Convert operations to data
+					data := make([]map[string]interface{}, len(operations))
+					for i, op := range operations {
+						data[i] = op.Data
+					}
+
+					exportData.Data[table] = data
+					fmt.Println("done")
 				}
 			}
 
-			fmt.Printf("Exported %d tables with a total of %d records\n", len(tables), totalRecords)
+			fmt.Printf("Exported %d tables with a total of %d records\n", len(tables), len(exportData.Data))
 
 			// If zip flag is enabled, create a zip file
 			if createZip {
@@ -611,7 +549,6 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().String("storage", "", "Storage type (local or s3)")
 	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
 	cmd.Flags().String("s3-region", "", "S3 region")
-	cmd.Flags().Int("records-per-batch", 500, "Number of records to export per batch")
 
 	return cmd
 }
