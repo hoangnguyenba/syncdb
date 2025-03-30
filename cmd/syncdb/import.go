@@ -230,6 +230,7 @@ func newImportCommand() *cobra.Command {
 			truncate, _ := cmd.Flags().GetBool("truncate")
 			upsert, _ := cmd.Flags().GetBool("upsert")
 			includeSchema, _ := cmd.Flags().GetBool("include-schema")
+			includeData, _ := cmd.Flags().GetBool("include-data")
 
 			// Get storage flags
 			storageType, _ := cmd.Flags().GetString("storage")
@@ -614,20 +615,6 @@ func newImportCommand() *cobra.Command {
 
 				fmt.Printf("Starting import of %d tables into database '%s'\n", len(metadata.Tables), dbName)
 				var totalRecords int
-				
-				// Get include-data flag
-				includeData := true
-				for _, arg := range os.Args {
-					if arg == "--include-data=false" || arg == "--include-data" && (os.Args[len(os.Args)-1] == "false") {
-						includeData = false
-						break
-					}
-				}
-
-				// Check if data should be imported based on metadata
-				if !metadata.ViewData && includeData {
-					return fmt.Errorf("cannot import data: original export did not include data")
-				}
 
 				// Skip data import if include-data is false
 				if !includeData {
@@ -793,15 +780,6 @@ func newImportCommand() *cobra.Command {
 			importTables := importData.Metadata.Tables
 			if len(tables) > 0 {
 				importTables = tables
-			}
-
-			// Get include-data flag
-			includeData := true
-			for _, arg := range os.Args {
-				if arg == "--include-data=false" || arg == "--include-data" && (os.Args[len(os.Args)-1] == "false") {
-					includeData = false
-					break
-				}
 			}
 
 			// Check if data should be imported based on metadata
