@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -375,19 +374,13 @@ func newExportCommand() *cobra.Command {
 					// Convert data to SQL format
 					var sqlStatements []string
 
-					// Get all columns in a consistent order
-					columnSet := make(map[string]bool)
-					for _, row := range data {
-						for col := range row {
-							columnSet[col] = true
-						}
+					// Get columns from database schema to ensure consistency
+					tableSchema, err := db.GetTableSchema(conn, table)
+					if err != nil {
+						return fmt.Errorf("failed to get schema for table %s: %v", table, err)
 					}
 
-					allColumns := make([]string, 0, len(columnSet))
-					for col := range columnSet {
-						allColumns = append(allColumns, col)
-					}
-					sort.Strings(allColumns) // Sort columns for consistency
+					allColumns := tableSchema.Columns
 
 					// Add backticks to column names
 					backtickedColumns := make([]string, len(allColumns))
