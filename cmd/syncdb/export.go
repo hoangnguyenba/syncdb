@@ -134,6 +134,16 @@ func newExportCommand() *cobra.Command {
 				s3Region = cfg.Export.S3Region
 			}
 
+			// Get batch size
+			var batchSize int
+			if cmd.Flags().Changed("batch-size") {
+				batchSize, _ = cmd.Flags().GetInt("batch-size")
+			} else if cfg.Export.BatchSize > 0 {
+				batchSize = cfg.Export.BatchSize
+			} else {
+				batchSize = 500 // Default batch size
+			}
+
 			// Validate required values
 			if dbName == "" {
 				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_EXPORT_DATABASE env)")
@@ -389,7 +399,6 @@ func newExportCommand() *cobra.Command {
 					}
 
 					// Process in batches of 100 rows for bulk insert
-					batchSize := 100
 					for i := 0; i < len(data); i += batchSize {
 						end := i + batchSize
 						if end > len(data) {
@@ -638,6 +647,7 @@ func newExportCommand() *cobra.Command {
 	cmd.Flags().String("storage", "", "Storage type (local or s3)")
 	cmd.Flags().String("s3-bucket", "", "S3 bucket name")
 	cmd.Flags().String("s3-region", "", "S3 region")
+	cmd.Flags().Int("batch-size", 500, "Batch size for bulk insert (default: 500)")
 
 	return cmd
 }

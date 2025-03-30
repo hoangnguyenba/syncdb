@@ -10,39 +10,40 @@ import (
 type Config struct {
 	Import struct {
 		Driver             string
-		Host              string
-		Port              int
-		Username          string
-		Password          string
-		Database          string
-		Tables            []string
-		Filepath          string
-		Format            string
-		FolderPath        string
-		ExcludeTable      []string
+		Host               string
+		Port               int
+		Username           string
+		Password           string
+		Database           string
+		Tables             []string
+		Filepath           string
+		Format             string
+		FolderPath         string
+		ExcludeTable       []string
 		ExcludeTableSchema []string
 		ExcludeTableData   []string
-		Storage           string
-		S3Bucket          string
-		S3Region          string
+		Storage            string
+		S3Bucket           string
+		S3Region           string
 	}
 	Export struct {
 		Driver             string
-		Host              string
-		Port              int
-		Username          string
-		Password          string
-		Database          string
-		Tables            []string
-		Filepath          string
-		Format            string
-		FolderPath        string
-		ExcludeTable      []string
+		Host               string
+		Port               int
+		Username           string
+		Password           string
+		Database           string
+		Tables             []string
+		Filepath           string
+		Format             string
+		FolderPath         string
+		ExcludeTable       []string
 		ExcludeTableSchema []string
 		ExcludeTableData   []string
-		Storage           string
-		S3Bucket          string
-		S3Region          string
+		Storage            string
+		S3Bucket           string
+		S3Region           string
+		BatchSize          int
 	}
 }
 
@@ -109,6 +110,7 @@ func LoadConfig() (*Config, error) {
 	config.Export.S3Bucket = getViperString("syncdb_export_s3_bucket", "")
 	config.Export.S3Region = getViperString("syncdb_export_s3_region", "")
 	config.Export.Storage = getViperString("syncdb_export_storage", "local")
+	config.Export.BatchSize = getViperInt("syncdb_export_batch_size", 500)
 
 	// Handle export tables
 	if tables := getViperString("syncdb_export_tables", ""); tables != "" {
@@ -136,6 +138,7 @@ func LoadConfig() (*Config, error) {
 	fmt.Printf("Debug: Export Storage = %s\n", config.Export.Storage)
 	fmt.Printf("Debug: Export S3 Bucket = %s\n", config.Export.S3Bucket)
 	fmt.Printf("Debug: Export S3 Region = %s\n", config.Export.S3Region)
+	fmt.Printf("Debug: Export Batch Size = %d\n", config.Export.BatchSize)
 
 	// Note: AWS credentials should be set as environment variables (e.g. AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
 	// or using a shared credentials file (~/.aws/credentials). See https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
