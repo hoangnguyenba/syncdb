@@ -469,3 +469,133 @@ func IsView(db *sql.DB, table string, driver string) (bool, error) {
 	}
 	return count > 0, nil
 }
+
+// GetTableDependencies returns a map of table dependencies where each table maps to a list of tables it depends on
+func GetTableDependencies(db *sql.DB, tables []string, driver string) (map[string][]string, error) {
+	dependencies := make(map[string][]string)
+	
+	var query string
+	switch driver {
+	case "mysql":
+		query = `
+			SELECT 
+				TABLE_NAME,
+				REFERENCED_TABLE_NAME
+			FROM information_schema.KEY_COLUMN_USAGE
+			WHERE TABLE_SCHEMA = DATABASE()
+			AND REFERENCED_TABLE_NAME IS NOT NULL
+			AND TABLE_NAME IN (?)
+		`
+	case "postgres":
+		query = `
+			SELECT
+				tc.table_name,
+				ccu.table_name AS referenced_table_name
+			FROM information_schema.table_constraints AS tc
+			JOIN information_schema.key_column_usage AS kcu
+				ON tc.constraint_name = kcu.constraint_name
+				AND tc.table_schema = kcu.table_schema
+			JOIN information_schema.constraint_column_usage AS ccu
+				ON ccu.constraint_name = tc.constraint_name
+				AND ccu.table_schema = tc.table_schema
+			WHERE tc.constraint_type = 'FOREIGN KEY'
+			AND tc.table_schema = 'public'
+			AND tc.table_name = ANY($1)
+		`
+	default:
+		return nil, fmt.Errorf("unsupported database driver: %s", driver)
+	}
+
+	// Convert tables slice to interface{} for query params
+	tableInterface := make([]interface{}, len(tables))
+	for i, v := range tables {
+		tableInterface[i] = v
+	}
+
+	// For MySQL, we need to replace the (?) with the correct number of placeholders
+	if driver == "mysql" {
+		query = strings.Replace(query, "(?)", "("+strings.Repeat(",?", len(tables))[1:]+")", 1)
+	}
+
+	rows, err := db.Query(query, tableInterface...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get table dependencies: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var table, referencedTable string
+		if err := rows.Scan(&table, &referencedTable); err != nil {
+			return nil, fmt.Errorf("failed to scan dependency: %v", err)
+		}
+		dependencies[table] = append(dependencies[table], referencedTable)
+	}
+
+	return dependencies, nil
+}
+
+// SortTablesByDependencies returns a sorted list of tables based on their dependencies
+// Tables with no dependencies come first, followed by tables that depend on them
+func SortTablesByDependencies(tables []string, dependencies map[string][]string) []string {
+	// Create a map to track visited tables
+	visited := make(map[string]bool)
+	// Create a map to track tables being processed (for cycle detection)
+	processing := make(map[string]bool)
+	// Result slice to store sorted tables
+	var sorted []string
+
+	// Helper function for depth-first search
+	var visit func(table string) bool
+	visit = func(table string) bool {
+		// Check if we've already processed this table
+		if visited[table] {
+			return true
+		}
+		// Check for cycles
+		if processing[table] {
+			return false
+		}
+
+		processing[table] = true
+
+		// Process dependencies first
+		for _, dep := range dependencies[table] {
+			// Skip if dependency is not in our target tables
+			found := false
+			for _, t := range tables {
+				if t == dep {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+
+			if !visit(dep) {
+				return false
+			}
+		}
+
+		processing[table] = false
+		visited[table] = true
+		sorted = append(sorted, table)
+		return true
+	}
+
+	// Process all tables
+	for _, table := range tables {
+		if !visit(table) {
+			// If we detect a cycle, just append the remaining tables
+			// This is not ideal but better than failing completely
+			for _, t := range tables {
+				if !visited[t] {
+					sorted = append(sorted, t)
+				}
+			}
+			break
+		}
+	}
+
+	return sorted
+}

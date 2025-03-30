@@ -147,6 +147,13 @@ func newExportCommand() *cobra.Command {
 				}
 			}
 
+			// Get table dependencies and sort tables
+			dependencies, err := db.GetTableDependencies(database, tables, dbDriver)
+			if err != nil {
+				return fmt.Errorf("failed to get table dependencies: %v", err)
+			}
+			tables = db.SortTablesByDependencies(tables, dependencies)
+
 			// Handle table exclusions
 			var excludeTables []string
 			var excludeTableSchema []string
