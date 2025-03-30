@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -600,26 +601,50 @@ func newImportCommand() *cobra.Command {
 
 				// Import schema if requested
 				if includeSchema {
+					// Read schema file directly
+					schemaFilePath := filepath.Join(importDir, "0_schema.sql")
+					schemaContent, err := os.ReadFile(schemaFilePath)
+					if err != nil {
+						return fmt.Errorf("failed to read schema file: %v", err)
+					}
+
+					// Execute schema directly
+					_, err = conn.DB.Exec(string(schemaContent))
+					if err != nil {
+						return fmt.Errorf("failed to execute schema: %v", err)
+					}
+
+					fmt.Println("Schema imported successfully")
+				}
+
+				// Truncate tables if requested (regardless of whether schema import is enabled)
+				if truncate {
 					for _, table := range tables {
-						if excludeSchemaMap[table] {
+						if excludeDataMap[table] {
 							continue
 						}
 
-						// Get schema for table
-						_, err := db.GetTableSchema(conn, table)
+						// Check if it's a view
+						isView, err := db.IsView(conn, table)
 						if err != nil {
-							return fmt.Errorf("failed to get schema for table %s: %v", table, err)
+							// If table doesn't exist yet, it's not a view
+							if strings.Contains(err.Error(), "doesn't exist") {
+								continue // Skip tables that don't exist
+							} else {
+								return fmt.Errorf("failed to check if %s is a view: %v", table, err)
+							}
+						}
+
+						// Don't truncate views
+						if isView {
+							continue
 						}
 
 						if err := db.TruncateTable(conn, table); err != nil {
 							return fmt.Errorf("failed to truncate table %s: %v", table, err)
 						}
 
-						// Create a buffer to store the data
-						var buf bytes.Buffer
-						if err := db.ImportTableData(conn, table, &buf); err != nil {
-							return fmt.Errorf("failed to import data for table %s: %v", table, err)
-						}
+						fmt.Printf("Truncated table '%s'\n", table)
 					}
 				}
 
@@ -633,7 +658,12 @@ func newImportCommand() *cobra.Command {
 						// Check if it's a view
 						isView, err := db.IsView(conn, table)
 						if err != nil {
-							return fmt.Errorf("failed to check if %s is a view: %v", table, err)
+							// If table doesn't exist yet, it's not a view
+							if strings.Contains(err.Error(), "doesn't exist") {
+								isView = false
+							} else {
+								return fmt.Errorf("failed to check if %s is a view: %v", table, err)
+							}
 						}
 
 						if isView && !includeViewData {
@@ -642,31 +672,39 @@ func newImportCommand() *cobra.Command {
 
 						fmt.Printf("Importing table '%s'...", table)
 
-						// Get current row count
-						rowCount, err := db.GetTableRowCount(conn, table)
-						if err != nil {
-							return fmt.Errorf("failed to get row count for table %s: %v", table, err)
-						}
-
 						// Read table data from file
 						tableFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table))
-						if _, err := os.ReadFile(tableFile); err != nil {
+						tableContent, err := os.ReadFile(tableFile)
+						if err != nil {
 							return fmt.Errorf("failed to read table file %s: %v", table, err)
 						}
 
-						// Create a buffer to store the data
-						var buf bytes.Buffer
-						if err := db.ImportTableData(conn, table, &buf); err != nil {
-							return fmt.Errorf("failed to import data to table %s: %v", table, err)
+						// Clean the SQL content (remove trailing % if present)
+						sqlContent := string(tableContent)
+						if strings.HasSuffix(sqlContent, "%") {
+							sqlContent = sqlContent[:len(sqlContent)-1]
 						}
 
-						// Get new row count
-						newRowCount, err := db.GetTableRowCount(conn, table)
-						if err != nil {
-							return fmt.Errorf("failed to get new row count for table %s: %v", table, err)
+						// Try to decode Base64 values in SQL
+						sqlContent = decodeBase64Values(sqlContent)
+
+						// Split into individual SQL statements
+						sqlStatements := strings.Split(sqlContent, ";")
+
+						// Execute each statement separately
+						for _, stmt := range sqlStatements {
+							stmt = strings.TrimSpace(stmt)
+							if stmt == "" {
+								continue
+							}
+
+							_, err = conn.DB.Exec(stmt + ";")
+							if err != nil {
+								return fmt.Errorf("failed to import data to table %s: %v", table, err)
+							}
 						}
 
-						fmt.Printf(" %d records imported\n", newRowCount-rowCount)
+						fmt.Println("done!")
 					}
 				}
 
@@ -904,4 +942,36 @@ func extractTableNameFromSchema(stmt string) string {
 	}
 
 	return ""
+}
+
+// isBase64 checks if a string is Base64 encoded
+func isBase64(s string) bool {
+	_, err := base64.StdEncoding.DecodeString(s)
+	return err == nil && len(s) > 8 && strings.TrimRight(s, "=") != s[:len(s)-1]
+}
+
+// decodeBase64Values decodes Base64 encoded values in a SQL statement
+func decodeBase64Values(sql string) string {
+	// Define regex to match SQL values
+	valueRegex := regexp.MustCompile(`'([^']*)'`)
+
+	// Find all values and try to decode them if they're Base64 encoded
+	decoded := valueRegex.ReplaceAllStringFunc(sql, func(match string) string {
+		// Extract value without quotes
+		value := match[1 : len(match)-1]
+
+		// Check if it's Base64 encoded
+		if isBase64(value) {
+			decodedBytes, err := base64.StdEncoding.DecodeString(value)
+			if err == nil {
+				// Replace with decoded value
+				return "'" + string(decodedBytes) + "'"
+			}
+		}
+
+		// Return original value if not Base64 or decoding failed
+		return match
+	})
+
+	return decoded
 }
