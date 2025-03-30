@@ -90,28 +90,3 @@ func populateCommonArgsFromFlagsAndConfig(cmd *cobra.Command, cfg config.CommonC
 
 	return args
 }
-
-// CommonArgs holds arguments derived from flags and config for command execution.
-// This helps pass validated/merged arguments to core logic functions.
-type CommonArgs struct {
-	Host               string
-	Port               int
-	Username           string
-	Password           string
-	Database           string
-	Driver             string
-	Tables             []string
-	FolderPath         string
-	Storage            string
-	S3Bucket           string
-	S3Region           string
-	Format             string
-	IncludeSchema      bool
-	IncludeData        bool
-	IncludeViewData    bool
-	Zip                bool
-	Base64             bool // Meaning differs for import (decode) / export (encode)
-	ExcludeTable       []string
-	ExcludeTableSchema []string
-	ExcludeTableData   []string
-}
