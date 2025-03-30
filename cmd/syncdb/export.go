@@ -98,13 +98,10 @@ func newExportCommand() *cobra.Command {
 				format = cfg.Export.Format
 			}
 
-			// Get include-data flag
-			var includeData bool
-			if cmd.Flags().Changed("include-data") {
-				includeData, _ = cmd.Flags().GetBool("include-data")
-			} else {
-				includeData = true  // default is true
-			}
+			// Get flags
+			includeSchema, _ := cmd.Flags().GetBool("include-schema")
+			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
+			includeData, _ := cmd.Flags().GetBool("include-data")
 
 			// Get folder path, default to database name if not provided
 			var folderPath string
@@ -237,8 +234,8 @@ func newExportCommand() *cobra.Command {
 					ExportedAt:   time.Now(),
 					DatabaseName: dbName,
 					Tables:       tables,
-					Schema:       false,
-					ViewData:     false,
+					Schema:       includeSchema,
+					ViewData:     includeViewData,
 					IncludeData:  includeData,
 				},
 				Schema: make(map[string]string),
@@ -258,7 +255,6 @@ func newExportCommand() *cobra.Command {
 			}
 
 			// Get schema if requested
-			includeSchema, _ := cmd.Flags().GetBool("include-schema")
 			if includeSchema {
 				var schemaOutput []string
 				for _, table := range tables {
@@ -296,9 +292,6 @@ func newExportCommand() *cobra.Command {
 					return fmt.Errorf("failed to write schema file: %v", err)
 				}
 			}
-
-			// Get include-view-data flag
-			includeViewData, _ := cmd.Flags().GetBool("include-view-data")
 
 			// Add new flag for records per batch
 			recordsPerBatch, _ := cmd.Flags().GetInt("records-per-batch")
