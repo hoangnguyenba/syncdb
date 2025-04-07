@@ -43,6 +43,9 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 
 	// Zip flag (different defaults)
 	flags.Bool("zip", false, "Create/Use zip file")
+
+	// Profile flag
+	flags.String("profile", "", "Name of the profile to use for default settings")
 }
 
 // CommonArgs holds arguments derived from flags and config for command execution.

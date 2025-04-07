@@ -178,14 +178,20 @@ func newImportCommand() *cobra.Command {
 				return fmt.Errorf("failed to load config: %v", err)
 			}
 
-			// Populate arguments from flags and config
-			cmdArgs := populateCommonArgsFromFlagsAndConfig(cmd, cfg.Import.CommonConfig) // Use 'cmdArgs'
+			// Get profile name from flag
+			profileName, _ := cmd.Flags().GetString("profile")
+
+			// Populate arguments from flags, config, and profile
+			cmdArgs, err := populateCommonArgsFromFlagsAndConfig(cmd, cfg.Import.CommonConfig, profileName) // Use 'cmdArgs'
+			if err != nil {
+				return err // Return error from profile loading/parsing
+			}
 
 			// Get import-specific flags
 			truncate, _ := cmd.Flags().GetBool("truncate")
-			filePath := getStringFlagWithConfigFallback(cmd, "file-path", cfg.Import.Filepath) // Use helper for file-path too
+			filePath := getStringFlagWithConfigFallback(cmd, "file-path", cfg.Import.Filepath) // File path is not part of profile
 
-			// Initialize storage
+			// Initialize storage (Storage settings are not part of profile)
 			var store storage.Storage
 			switch cmdArgs.Storage { // Use cmdArgs
 			case "local":
@@ -205,12 +211,12 @@ func newImportCommand() *cobra.Command {
 				return fmt.Errorf("unsupported storage type: %s", cmdArgs.Storage) // Use cmdArgs
 			}
 
-			// Validate required values
+			// Validate required values (Database name should now be resolved considering profile)
 			if cmdArgs.Database == "" { // Use cmdArgs
-				return fmt.Errorf("database name is required (set via --database flag or SYNCDB_IMPORT_DATABASE env)")
+				return fmt.Errorf("database name is required (set via --database flag, SYNCDB_IMPORT_DATABASE env, or profile)")
 			}
 
-			// Check if folder path is provided
+			// Check if folder path is provided (Folder path is not part of profile)
 			if cmdArgs.FolderPath != "" { // Use cmdArgs
 				var importDir string
 
@@ -466,9 +472,9 @@ func newImportCommand() *cobra.Command {
 				conn := &db.Connection{
 					DB: database,
 					Config: db.ConnectionConfig{
-						Driver:   cmdArgs.Driver, // Use cmdArgs
-						Host:     cmdArgs.Host, // Use cmdArgs
-						Port:     cmdArgs.Port, // Use cmdArgs
+						Driver:   cmdArgs.Driver,   // Use cmdArgs
+						Host:     cmdArgs.Host,     // Use cmdArgs
+						Port:     cmdArgs.Port,     // Use cmdArgs
 						User:     cmdArgs.Username, // Use cmdArgs
 						Password: cmdArgs.Password, // Use cmdArgs
 						Database: cmdArgs.Database, // Use cmdArgs
@@ -495,9 +501,9 @@ func newImportCommand() *cobra.Command {
 				sortedTables := db.SortTablesByDependencies(currentTables, deps)
 
 				// Use exclusion lists from cmdArgs
-				excludeTables := cmdArgs.ExcludeTable // Use cmdArgs
+				excludeTables := cmdArgs.ExcludeTable            // Use cmdArgs
 				excludeTableSchema := cmdArgs.ExcludeTableSchema // Use cmdArgs
-				excludeTableData := cmdArgs.ExcludeTableData // Use cmdArgs
+				excludeTableData := cmdArgs.ExcludeTableData     // Use cmdArgs
 
 				// Create a map for faster lookup
 				excludeTableMap := make(map[string]bool)
@@ -766,9 +772,9 @@ func newImportCommand() *cobra.Command {
 			conn := &db.Connection{
 				DB: database,
 				Config: db.ConnectionConfig{
-					Driver:   cmdArgs.Driver, // Use cmdArgs
-					Host:     cmdArgs.Host, // Use cmdArgs
-					Port:     cmdArgs.Port, // Use cmdArgs
+					Driver:   cmdArgs.Driver,   // Use cmdArgs
+					Host:     cmdArgs.Host,     // Use cmdArgs
+					Port:     cmdArgs.Port,     // Use cmdArgs
 					User:     cmdArgs.Username, // Use cmdArgs
 					Password: cmdArgs.Password, // Use cmdArgs
 					Database: cmdArgs.Database, // Use cmdArgs
@@ -776,7 +782,7 @@ func newImportCommand() *cobra.Command {
 			}
 
 			// Get base64 flag from cmdArgs and check if it's set in metadata (for JSON format)
-			useBase64 := cmdArgs.Base64 // Use cmdArgs
+			useBase64 := cmdArgs.Base64                                               // Use cmdArgs
 			if cmdArgs.Format == "json" && importData.Metadata.Base64 && !useBase64 { // Use cmdArgs
 				fmt.Println("Metadata indicates base64 encoding was used during export. Enabling base64 decoding automatically.")
 				useBase64 = true
@@ -784,7 +790,7 @@ func newImportCommand() *cobra.Command {
 
 			// Filter tables if specified
 			importTables := importData.Metadata.Tables // Use tables from the imported file's metadata
-			if len(cmdArgs.Tables) > 0 { // Override with tables from command line/config if provided // Use cmdArgs
+			if len(cmdArgs.Tables) > 0 {               // Override with tables from command line/config if provided // Use cmdArgs
 				importTables = cmdArgs.Tables // Use cmdArgs
 			}
 

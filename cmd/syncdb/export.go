@@ -59,17 +59,24 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 		return nil, 0, nil, fmt.Errorf("failed to load config: %v", err)
 	}
 
-	// Populate arguments from flags and config
-	cmdArgs := populateCommonArgsFromFlagsAndConfig(cmd, cfg.Export.CommonConfig)
+	// Get profile name from flag
+	profileName, _ := cmd.Flags().GetString("profile")
 
-	// Get export-specific flags/config
+	// Populate arguments from flags, config, and profile
+	cmdArgs, err := populateCommonArgsFromFlagsAndConfig(cmd, cfg.Export.CommonConfig, profileName)
+	if err != nil {
+		return nil, 0, nil, err // Return error from profile loading/parsing
+	}
+
+	// Get export-specific flags/config (batch-size is not part of profile)
+	// Use the simpler helper here as profile doesn't affect batch size
 	batchSize := getIntFlagWithConfigFallback(cmd, "batch-size", cfg.Export.BatchSize)
 
-	// Validate required values
+	// Validate required values (Database name should now be resolved considering profile)
 	if cmdArgs.Database == "" {
-		return nil, 0, nil, fmt.Errorf("database name is required (set via --database flag or SYNCDB_EXPORT_DATABASE env)")
+		return nil, 0, nil, fmt.Errorf("database name is required (set via --database flag, SYNCDB_EXPORT_DATABASE env, or profile)")
 	}
-	// Validate S3 args if storage=s3
+	// Validate S3 args if storage=s3 (Storage is not part of profile)
 	if cmdArgs.Storage == "s3" {
 		if cmdArgs.S3Bucket == "" {
 			return nil, 0, nil, fmt.Errorf("s3-bucket is required when storage is set to s3")
@@ -78,7 +85,6 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 			return nil, 0, nil, fmt.Errorf("s3-region is required when storage is set to s3")
 		}
 	}
-
 
 	// Initialize database connection
 	database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database)
@@ -587,7 +593,6 @@ func cleanupLocalFiles(paths ...string) {
 	}
 }
 
-
 // runExport is the main execution function for the export command.
 func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 	cmdArgs, batchSize, conn, err := loadAndValidateArgs(cmd)
@@ -641,7 +646,6 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 		fmt.Println("Skipping data export as per --include-data=false.")
 	}
 
-
 	// --- Post-export processing (Zip, S3 Upload, Cleanup) ---
 	zipFileName := "" // Store zip file name if created
 
@@ -650,7 +654,7 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 		zipFileName = filepath.Join(cmdArgs.FolderPath, timestamp+".zip")
 		if err = createZipArchive(exportPath, zipFileName); err != nil {
 			cleanupLocalFiles(exportPath, zipFileName) // Clean up dir and potentially partial zip
-			return err // Error already formatted by createZipArchive
+			return err                                 // Error already formatted by createZipArchive
 		}
 		// Zip successful, remove original directory *unless* S3 upload fails later
 		// We'll handle cleanup after potential S3 upload
