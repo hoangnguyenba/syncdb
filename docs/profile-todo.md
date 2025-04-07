@@ -21,29 +21,29 @@ This list outlines the tasks required to implement the Profile Management featur
 
 ### Phase 3: CLI Command Implementation (`pkg/cli`)
 
-*   [ ] **Add `profile` Parent Command:** Create the base `syncdb profile` command using Cobra.
-*   [ ] **Implement `profile create`:**
-    *   [ ] Define the `syncdb profile create <profile-name>` command using Cobra.
-    *   [ ] Add flags corresponding to all fields in `ProfileConfig`.
-    *   [ ] Implement logic:
+*   [X] **Add `profile` Parent Command:** Create the base `syncdb profile` command using Cobra.
+*   [X] **Implement `profile create`:**
+    *   [X] Define the `syncdb profile create <profile-name>` command using Cobra.
+    *   [X] Add flags corresponding to all fields in `ProfileConfig`.
+    *   [X] Implement logic:
         *   Check if profile already exists; fail if it does.
         *   Validate required flags (e.g., `--database`).
         *   Populate a `ProfileConfig` struct from flags.
         *   Call `saveProfile`.
         *   Provide user feedback (success/error messages).
-    *   [ ] Add warning about storing passwords in plain text if provided.
-*   [ ] **Implement `profile update`:**
-    *   [ ] Define the `syncdb profile update <profile-name>` command using Cobra.
-    *   [ ] Add the same flags as `profile create`.
-    *   [ ] Implement logic:
+    *   [X] Add warning about storing passwords in plain text if provided.
+*   [X] **Implement `profile update`:**
+    *   [X] Define the `syncdb profile update <profile-name>` command using Cobra.
+    *   [X] Add the same flags as `profile create`.
+    *   [X] Implement logic:
         *   Attempt to `loadProfile`. If it doesn't exist, start with an empty config (or treat like create).
         *   Merge flag values into the loaded/new config (only update fields provided by flags).
         *   Call `saveProfile`.
         *   Provide user feedback.
-    *   [ ] Add warning about storing passwords in plain text if provided/updated.
-*   [ ] **Implement `profile list`:**
-    *   [ ] Define the `syncdb profile list` command using Cobra.
-    *   [ ] Implement logic:
+    *   [X] Add warning about storing passwords in plain text if provided/updated.
+*   [X] **Implement `profile list`:**
+    *   [X] Define the `syncdb profile list` command using Cobra.
+    *   [X] Implement logic:
         *   Read the contents of the profile directory.
         *   Filter for files matching the profile naming convention (e.g., `*.yaml`).
         *   Extract profile names.
