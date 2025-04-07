@@ -53,8 +53,8 @@ This list outlines the tasks required to implement the Profile Management featur
 
 ### Phase 4: Integration with `export` and `import`
 
-*   [ ] **Add `--profile` Flag:** Add the `--profile <profile-name>` string flag to both the `export` and `import` commands in Cobra.
-*   [ ] **Integrate Profile Loading:** Modify the configuration setup logic within the `export` and `import` command handlers:
+*   [x] **Add `--profile` Flag:** Add the `--profile <profile-name>` string flag to both the `export` and `import` commands in Cobra.
+*   [x] **Integrate Profile Loading:** Modify the configuration setup logic within the `export` and `import` command handlers:
     *   If the `--profile` flag is provided:
         *   Call `loadProfile` using the flag value. Handle errors if the profile doesn't exist.
         *   Integrate the loaded `ProfileConfig` into the overall configuration settings according to the defined priority (Flags > Env Vars > Profile > Defaults).
@@ -83,5 +83,5 @@ This list outlines the tasks required to implement the Profile Management featur
 
 ### Future Enhancements (Post-Initial Release)
 
-*   [ ] Implement `profile delete <profile-name>` command with confirmation.
-*   [ ] Implement `profile show <profile-name>` command.
+*   [x] Implement `profile delete <profile-name>` command with confirmation.
+*   [x] Implement `profile show <profile-name>` command.
