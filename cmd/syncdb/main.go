@@ -22,9 +22,27 @@ var (
 	}
 )
 
+// newProfileCommand creates the parent 'profile' command
+func newProfileCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "profile",
+		Short: "Manage configuration profiles",
+		Long:  `Create, update, and list configuration profiles for easier command execution.`,
+		// Run: func(cmd *cobra.Command, args []string) { // Optional: Add help text if called without subcommand
+		// 	cmd.Help()
+		// },
+	}
+	// Add subcommands
+	cmd.AddCommand(newProfileCreateCommand())
+	cmd.AddCommand(newProfileUpdateCommand())
+	cmd.AddCommand(newProfileListCommand()) // Add list command
+	return cmd
+}
+
 func init() {
 	rootCmd.AddCommand(newExportCommand())
 	rootCmd.AddCommand(newImportCommand())
+	rootCmd.AddCommand(newProfileCommand()) // Add the profile command
 }
 
 func Execute() error {

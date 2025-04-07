@@ -18,6 +18,7 @@ SyncDB is a command-line tool written in Go that helps you export and import dat
 - Optional schema inclusion in exports
 - Conditional data export using WHERE clauses
 - Organized export structure with timestamp-based folders
+- **Profile Management:** Save and reuse common configurations.
 
 ## Installation
 
@@ -39,6 +40,80 @@ go build -o syncdb cmd/syncdb/*.go
 ```
 
 ## Usage
+
+### Profile Management
+
+SyncDB allows you to save common connection and operation settings into named profiles for easier reuse.
+
+**Profile Storage:**
+- Profiles are stored as YAML files (`<profile-name>.yaml`) in a dedicated directory.
+- This directory is determined by the `SYNCDB_PATH` environment variable.
+- If `SYNCDB_PATH` is not set, it defaults to `$HOME/.config/syncdb/profiles` (or platform equivalent like `~/Library/Application Support/syncdb/profiles` on macOS, `%APPDATA%\syncdb\profiles` on Windows).
+
+**Commands:**
+
+- **Create a new profile:**
+  ```bash
+  syncdb profile create <profile-name> [flags...]
+  ```
+  *Example:* Create a profile for a local development MySQL database.
+  ```bash
+  syncdb profile create dev-local \
+    --host localhost \
+    --port 3306 \
+    --username devuser \
+    --password "devpass" \
+    --database my_dev_db \
+    --driver mysql \
+    --tables users,products \
+    --profile-include-schema=true \
+    --exclude-table-data logs
+  # Note: Passwords are stored in plain text in the profile file!
+  ```
+
+- **Update an existing profile (or create if missing):**
+  ```bash
+  syncdb profile update <profile-name> [flags...]
+  ```
+  *Example:* Update the password and add another excluded table for the `dev-local` profile.
+  ```bash
+  syncdb profile update dev-local \
+    --password "new_dev_pass" \
+    --exclude-table-data logs,audit_trail
+  ```
+
+- **List available profiles:**
+  ```bash
+  syncdb profile list
+  ```
+  *Output Example:*
+  ```
+  Available Profiles:
+  - dev-local
+  - staging-pg
+  ```
+
+**Using Profiles with Export/Import:**
+
+Use the `--profile <profile-name>` flag with `export` or `import` commands to load settings from a profile.
+
+```bash
+# Export using 'dev-local' profile, storing locally
+syncdb export --profile dev-local --storage local --folder-path ./dev_backups
+
+# Import using 'staging-pg' profile from S3, overriding the database name for this run
+syncdb import --profile staging-pg --storage s3 --s3-bucket staging-backups --database temp_staging_restore
+```
+
+**Configuration Loading Priority:**
+
+Settings are determined in the following order (highest priority first):
+1.  Command-line flags (e.g., `--port 3307`)
+2.  Environment variables (e.g., `SYNCDB_PORT=3308`)
+3.  Settings from the specified `--profile <profile-name>` file.
+4.  Default values defined in the application.
+
+---
 
 ### Export Data
 
@@ -156,6 +231,10 @@ syncdb import \
 
 ## Configuration
 
+Flags can be used to configure database connections, export/import behavior, and storage options. They can also be set via environment variables (see below).
+
+- `--profile`: Name of the configuration profile to use for default settings.
+
 ### Database Connection
 
 - `--host`: Database server address (default: "localhost")
@@ -197,7 +276,7 @@ syncdb import \
 
 ### Environment Variables
 
-All command-line flags can also be set using environment variables. The format is:
+Most command-line flags can also be set using environment variables (except for profile-specific boolean flags like `--profile-include-schema`). Environment variables have lower priority than flags but higher priority than profile settings. The format is:
 ```
 SYNCDB_<FLAG_NAME>=value
 ```
@@ -229,4 +308,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with [Cobra](https://github.com/spf13/cobra) for CLI functionality
 - Uses [AWS SDK for Go](https://github.com/aws/aws-sdk-go) for S3 integration
-- Uses [Google Drive API](https://developers.google.com/drive/api/v3/reference) for Google Drive integration 
+- Uses [Google Drive API](https://developers.google.com/drive/api/v3/reference) for Google Drive integration

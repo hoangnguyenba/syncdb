@@ -72,3 +72,25 @@ type CommonArgs struct {
 	ExcludeTableSchema []string
 	ExcludeTableData   []string
 }
+
+// addProfileConfigFlags adds flags to a command for all fields in ProfileConfig.
+// Used by 'profile create' and 'profile update'.
+func addProfileConfigFlags(cmd *cobra.Command) {
+	flags := cmd.Flags()
+	// Defaults should generally be empty or zero for create/update,
+	// letting the profile file store the actual desired value.
+	flags.String("host", "", "Database host")
+	flags.Int("port", 0, "Database port (e.g., 3306 for MySQL, 5432 for PostgreSQL)")
+	flags.String("username", "", "Database username")
+	flags.String("password", "", "Database password (will be stored in plain text!)")
+	flags.String("database", "", "Database name") // Required for create, optional for update
+	flags.String("driver", "", "Database driver (e.g., mysql, postgres)")
+	flags.StringSlice("tables", []string{}, "Tables to include (comma-separated, default: all)")
+	// Use different names for bool flags to avoid conflict with export/import flags if they differ
+	flags.Bool("profile-include-schema", false, "Include schema definition in operations using this profile")
+	flags.Bool("profile-include-data", true, "Include table data in operations using this profile") // Default true makes sense
+	flags.String("condition", "", "WHERE condition for filtering data during export")
+	flags.StringSlice("exclude-table", []string{}, "Tables to fully exclude")
+	flags.StringSlice("exclude-table-schema", []string{}, "Tables to exclude schema from")
+	flags.StringSlice("exclude-table-data", []string{}, "Tables to exclude data from")
+}
