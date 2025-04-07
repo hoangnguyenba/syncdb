@@ -93,6 +93,45 @@ SyncDB allows you to save common connection and operation settings into named pr
   - staging-pg
   ```
 
+- **Show details of a specific profile:**
+  ```bash
+  syncdb profile show <profile-name>
+  ```
+  *Example:* Show the configuration stored in the `dev-local` profile.
+  ```bash
+  syncdb profile show dev-local
+  ```
+  *Output Example (YAML format):*
+  ```yaml
+  --- Profile: dev-local ---
+  host: localhost
+  port: 3306
+  username: devuser
+  password: new_dev_pass
+  database: my_dev_db
+  driver: mysql
+  tables:
+      - users
+      - products
+  includeschema: true
+  includedata: true
+  condition: ""
+  excludetable: []
+  excludetableschema: []
+  excludetabledata:
+      - logs
+      - audit_trail
+  ```
+
+- **Delete a profile:**
+  ```bash
+  syncdb profile delete <profile-name> --force
+  ```
+  *Example:* Delete the `staging-pg` profile (requires confirmation via `--force`).
+  ```bash
+  syncdb profile delete staging-pg --force
+  ```
+
 **Using Profiles with Export/Import:**
 
 Use the `--profile <profile-name>` flag with `export` or `import` commands to load settings from a profile.

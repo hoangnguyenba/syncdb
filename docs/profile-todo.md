@@ -78,12 +78,10 @@ This list outlines the tasks required to implement the Profile Management featur
     *   Explain the profile storage location (`SYNCDB_PATH`, default path).
     *   Explain the configuration loading priority.
 *   [ ] **Update CLI Help Text:** Ensure Cobra command descriptions and flag help messages are clear and accurate.
-*   [ ] **Create `profile-prd.md`:** (Already done)
-*   [ ] **Create `profile-todo.md`:** (This file)
+*   [x] **Create `profile-prd.md`:** (Already done)
+*   [x] **Create `profile-todo.md`:** (This file)
 
 ### Future Enhancements (Post-Initial Release)
 
 *   [ ] Implement `profile delete <profile-name>` command with confirmation.
 *   [ ] Implement `profile show <profile-name>` command.
-*   [ ] Add interactive mode for `profile create/update`.
-*   [ ] Investigate profile encryption options.

@@ -35,7 +35,9 @@ func newProfileCommand() *cobra.Command {
 	// Add subcommands
 	cmd.AddCommand(newProfileCreateCommand())
 	cmd.AddCommand(newProfileUpdateCommand())
-	cmd.AddCommand(newProfileListCommand()) // Add list command
+	cmd.AddCommand(newProfileListCommand())
+	cmd.AddCommand(newProfileDeleteCommand())
+	cmd.AddCommand(newProfileShowCommand()) // Add show command
 	return cmd
 }
 
