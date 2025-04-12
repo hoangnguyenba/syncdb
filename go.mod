@@ -50,6 +50,3 @@ require (
 	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 )
-
-// Replaced by module syncdb/config with:
-replace github.com/hoangnguyenba/syncdb/internal/config => ../pkg/config
