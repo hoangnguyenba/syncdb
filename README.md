@@ -24,9 +24,21 @@ SyncDB is a command-line tool written in Go that helps you export and import dat
 
 ### Prerequisites
 
-- Go 1.19 or later
+- Go 1.22 or later
 - Access to source and target databases
 - Appropriate credentials for chosen storage option (S3/Google Drive)
+
+### Using Go Install
+
+```bash
+go install github.com/hoangnguyenba/syncdb/cmd/syncdb@latest
+```
+
+Or install a specific version:
+
+```bash
+go install github.com/hoangnguyenba/syncdb/cmd/syncdb@v0.1.0
+```
 
 ### Building from Source
 
