@@ -122,19 +122,19 @@ func getTableDependencies(db *sql.DB, tableName string, driver string) ([]string
 	switch driver {
 	case DriverMySQL:
 		query = `
-			SELECT DISTINCT TABLE_NAME
-			FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-			WHERE REFERENCED_TABLE_SCHEMA = DATABASE()
-			AND REFERENCED_TABLE_NAME = ?
-			AND REFERENCED_COLUMN_NAME IS NOT NULL`
+            SELECT DISTINCT REFERENCED_TABLE_NAME
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = ?
+            AND REFERENCED_TABLE_NAME IS NOT NULL`
 	case DriverPostgres:
 		query = `
-			SELECT DISTINCT tc.table_name
-			FROM information_schema.table_constraints tc
-			JOIN information_schema.constraint_column_usage ccu
-				ON tc.constraint_name = ccu.constraint_name
-			WHERE tc.constraint_type = 'FOREIGN KEY'
-			AND ccu.table_name = $1`
+            SELECT DISTINCT ccu.table_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.constraint_column_usage ccu
+                ON tc.constraint_name = ccu.constraint_name
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+            AND tc.table_name = $1`
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedDriver, driver)
 	}

@@ -535,6 +535,8 @@ func newImportCommand() *cobra.Command {
 					if err := importSchema(conn, schemaContent); err != nil {
 						return fmt.Errorf("failed to import schema: %v", err)
 					}
+				} else {
+					fmt.Println("Skipping schema import as --include-schema is set to false")
 				}
 
 				// Truncate tables if requested (regardless of whether schema import is enabled)

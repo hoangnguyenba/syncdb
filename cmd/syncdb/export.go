@@ -124,7 +124,7 @@ func expandTablePatterns(allTables, patterns []string) map[string]bool {
 // getFinalTables determines the list of tables to be exported based on command arguments,
 // database schema dependencies, and exclusion lists. It also returns maps indicating
 // which tables should have their schema or data excluded.
-func getFinalTables(conn *db.Connection, cmdArgs *CommonArgs) ([]string, map[string]bool, map[string]bool, error) { // Changed commonArgs to CommonArgs
+func getFinalTables(conn *db.Connection, cmdArgs *CommonArgs) ([]string, map[string]bool, map[string]bool, error) {
 	var err error
 	currentTables := cmdArgs.Tables
 	allTables := currentTables
@@ -142,15 +142,30 @@ func getFinalTables(conn *db.Connection, cmdArgs *CommonArgs) ([]string, map[str
 	expandedExcludeSchema := expandTablePatterns(allTables, cmdArgs.ExcludeTableSchema)
 	expandedExcludeData := expandTablePatterns(allTables, cmdArgs.ExcludeTableData)
 
-	// Get table dependencies and sort tables
+	// Get table dependencies and sort tables to ensure proper order during export
 	deps := make(map[string][]string)
 	for _, table := range currentTables {
-		deps[table], err = db.GetTableDependencies(conn, table)
+		tableDeps, err := db.GetTableDependencies(conn, table)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to get dependencies for table %s: %v", table, err)
 		}
+		// Only include dependencies that are in our current table list
+		var filteredDeps []string
+		for _, dep := range tableDeps {
+			for _, current := range currentTables {
+				if dep == current {
+					filteredDeps = append(filteredDeps, dep)
+					break
+				}
+			}
+		}
+		deps[table] = filteredDeps
+		fmt.Printf("Table %s depends on: %v\n", table, filteredDeps)
 	}
+
+	// Sort tables by dependencies to ensure parent tables are exported first
 	sortedTables := db.SortTablesByDependencies(currentTables, deps)
+	fmt.Printf("Tables sorted by dependencies: %v\n", sortedTables)
 
 	// Create maps for faster lookup
 	excludeTableMap := expandedExclude
@@ -163,7 +178,7 @@ func getFinalTables(conn *db.Connection, cmdArgs *CommonArgs) ([]string, map[str
 		excludeDataMap[t] = true
 	}
 
-	// Filter out fully excluded tables
+	// Filter out fully excluded tables while preserving dependency order
 	var finalTables []string
 	for _, t := range sortedTables {
 		if !excludeTableMap[t] && (len(expandedInclude) == 0 || expandedInclude[t]) {
@@ -171,6 +186,7 @@ func getFinalTables(conn *db.Connection, cmdArgs *CommonArgs) ([]string, map[str
 		}
 	}
 
+	fmt.Printf("Final table order for export: %v\n", finalTables)
 	return finalTables, excludeSchemaMap, excludeDataMap, nil
 }
 
