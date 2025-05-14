@@ -159,9 +159,36 @@ func getTableDependencies(db *sql.DB, tableName string, driver string) ([]string
 
 // sortTablesByDependencies sorts tables based on their dependencies
 func sortTablesByDependencies(tables []string, deps map[string][]string) []string {
+	// First pass: get all dependencies including nested ones
+	allDeps := make(map[string][]string)
+	for _, table := range tables {
+		// Start with direct dependencies
+		tableDeps := make(map[string]bool)
+		var getDeps func(string)
+		getDeps = func(t string) {
+			if d, ok := deps[t]; ok {
+				for _, dep := range d {
+					if !tableDeps[dep] {
+						tableDeps[dep] = true
+						getDeps(dep)
+					}
+				}
+			}
+		}
+		getDeps(table)
+
+		// Convert map to slice
+		var depsList []string
+		for dep := range tableDeps {
+			depsList = append(depsList, dep)
+		}
+		allDeps[table] = depsList
+	}
+
+	// Second pass: topological sort
 	visited := make(map[string]bool)
 	temp := make(map[string]bool)
-	result := make([]string, 0, len(tables))
+	var result []string
 
 	var visit func(table string) error
 	visit = func(table string) error {
@@ -173,7 +200,8 @@ func sortTablesByDependencies(tables []string, deps map[string][]string) []strin
 		}
 
 		temp[table] = true
-		for _, dep := range deps[table] {
+		// Process all dependencies first
+		for _, dep := range allDeps[table] {
 			if err := visit(dep); err != nil {
 				return err
 			}
@@ -184,15 +212,17 @@ func sortTablesByDependencies(tables []string, deps map[string][]string) []strin
 		return nil
 	}
 
+	// Visit all tables
 	for _, table := range tables {
 		if !visited[table] {
 			if err := visit(table); err != nil {
-				// If there's a circular dependency, return tables in original order
-				return tables
+				fmt.Printf("Warning: Circular dependency detected, some tables may not be in optimal order: %v\n", err)
+				continue
 			}
 		}
 	}
 
+	// No need to reverse - we already have the correct order with dependencies first
 	return result
 }
 

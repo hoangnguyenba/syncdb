@@ -430,19 +430,21 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 // Returns the total number of records exported across all tables.
 func writeDataFiles(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, finalTables []string, excludeDataMap map[string]bool, batchSize int) (int, error) { // Changed commonArgs to CommonArgs
 	totalRecords := 0
-	for i, table := range finalTables {
+	fileIndex := 1 // Start numbering from 1
+	for _, table := range finalTables {
 		if excludeDataMap[table] {
 			fmt.Printf("Skipping data export for table '%s' due to exclusion.\n", table)
 			continue
 		}
 
-		// Pass table index (i) for file naming
-		recordsWritten, err := writeTableDataFile(conn, exportPath, table, cmdArgs, batchSize, i)
+		// Pass sequential file index for file naming
+		recordsWritten, err := writeTableDataFile(conn, exportPath, table, cmdArgs, batchSize, fileIndex)
 		if err != nil {
 			// Decide if we should continue with other tables or stop on first error
 			return totalRecords, fmt.Errorf("error exporting data for table %s: %v", table, err) // Stop on error
 		}
 		totalRecords += recordsWritten
+		fileIndex++ // Increment for next file
 	}
 	return totalRecords, nil
 }
