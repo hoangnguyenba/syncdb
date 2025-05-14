@@ -280,6 +280,24 @@ syncdb import \
   --gdrive-folder folder_id
 ```
 
+### Table Pattern Matching (Wildcards)
+
+All table-related parameters (such as `--tables`, `--exclude-table`, `--exclude-table-schema`, `--exclude-table-data`) support simple wildcard patterns:
+
+- `*` matches all tables
+- `*_archival` matches all tables ending with `_archival`
+- `bk_*` matches all tables starting with `bk_`
+- `*foo*` matches all tables containing `foo`
+
+You can combine multiple patterns separated by commas. For example:
+
+```bash
+syncdb export --exclude-table logs,*_archival,bk_*
+```
+This will exclude the `logs` table, all tables ending with `_archival`, and all tables starting with `bk_`.
+
+This logic applies to all table selection/exclusion parameters in both export and import commands.
+
 ## Configuration
 
 Flags can be used to configure database connections, export/import behavior, and storage options. They can also be set via environment variables (see below).

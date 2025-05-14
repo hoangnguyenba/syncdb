@@ -109,18 +109,38 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 	return &cmdArgs, batchSize, conn, nil // Return address of cmdArgs
 }
 
+func expandTablePatterns(allTables, patterns []string) map[string]bool {
+	result := make(map[string]bool)
+	for _, pat := range patterns {
+		for _, tbl := range allTables {
+			if db.TablePatternMatch(tbl, strings.TrimSpace(pat)) {
+				result[tbl] = true
+			}
+		}
+	}
+	return result
+}
+
 // getFinalTables determines the list of tables to be exported based on command arguments,
 // database schema dependencies, and exclusion lists. It also returns maps indicating
 // which tables should have their schema or data excluded.
 func getFinalTables(conn *db.Connection, cmdArgs *CommonArgs) ([]string, map[string]bool, map[string]bool, error) { // Changed commonArgs to CommonArgs
 	var err error
 	currentTables := cmdArgs.Tables
+	allTables := currentTables
 	if len(currentTables) == 0 {
-		currentTables, err = db.GetTables(conn)
+		allTables, err = db.GetTables(conn)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to get tables: %v", err)
 		}
+		currentTables = allTables
 	}
+
+	// Expand patterns for all table-related params
+	expandedInclude := expandTablePatterns(allTables, cmdArgs.Tables)
+	expandedExclude := expandTablePatterns(allTables, cmdArgs.ExcludeTable)
+	expandedExcludeSchema := expandTablePatterns(allTables, cmdArgs.ExcludeTableSchema)
+	expandedExcludeData := expandTablePatterns(allTables, cmdArgs.ExcludeTableData)
 
 	// Get table dependencies and sort tables
 	deps := make(map[string][]string)
@@ -132,32 +152,21 @@ func getFinalTables(conn *db.Connection, cmdArgs *CommonArgs) ([]string, map[str
 	}
 	sortedTables := db.SortTablesByDependencies(currentTables, deps)
 
-	// Use exclusion lists from cmdArgs
-	excludeTables := cmdArgs.ExcludeTable
-	excludeTableSchema := cmdArgs.ExcludeTableSchema
-	excludeTableData := cmdArgs.ExcludeTableData
-
 	// Create maps for faster lookup
-	excludeTableMap := make(map[string]bool)
-	excludeSchemaMap := make(map[string]bool)
-	excludeDataMap := make(map[string]bool)
+	excludeTableMap := expandedExclude
+	excludeSchemaMap := expandedExcludeSchema
+	excludeDataMap := expandedExcludeData
 
-	for _, t := range excludeTables {
-		excludeTableMap[t] = true
-		excludeSchemaMap[t] = true // If table is excluded, exclude schema and data too
-		excludeDataMap[t] = true
-	}
-	for _, t := range excludeTableSchema {
+	// If a table is fully excluded, also exclude schema and data
+	for t := range excludeTableMap {
 		excludeSchemaMap[t] = true
-	}
-	for _, t := range excludeTableData {
 		excludeDataMap[t] = true
 	}
 
 	// Filter out fully excluded tables
 	var finalTables []string
 	for _, t := range sortedTables {
-		if !excludeTableMap[t] {
+		if !excludeTableMap[t] && (len(expandedInclude) == 0 || expandedInclude[t]) {
 			finalTables = append(finalTables, t)
 		}
 	}
@@ -587,9 +596,9 @@ func cleanupLocalFiles(paths ...string) {
 			continue
 		}
 		fmt.Printf("Cleaning up local path: %s\n", path)
-		if err := os.RemoveAll(path); err != nil {
-			fmt.Printf("Warning: failed to clean up path %s: %v\n", path, err)
-		}
+		// if err := os.RemoveAll(path); err != nil {
+		// 	fmt.Printf("Warning: failed to clean up path %s: %v\n", path, err)
+		// }
 	}
 }
 
@@ -628,7 +637,7 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 	// Export and write schema if requested
 	if cmdArgs.IncludeSchema {
 		if err = writeSchema(conn, exportPath, cmdArgs, finalTables, excludeSchemaMap); err != nil {
-			cleanupLocalFiles(exportPath)
+			// cleanupLocalFiles(exportPath)
 			return err
 		}
 	}

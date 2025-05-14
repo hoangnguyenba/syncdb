@@ -136,3 +136,25 @@ func SanitizeSQL(input string) string {
 
 	return result
 }
+
+// TablePatternMatch returns true if the tableName matches the pattern with '*' wildcard support.
+// Only supports '*' as prefix or suffix (not in the middle).
+func TablePatternMatch(tableName, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
+		// *foo* matches substring
+		needle := pattern[1 : len(pattern)-1]
+		return strings.Contains(tableName, needle)
+	} else if strings.HasPrefix(pattern, "*") {
+		// *foo matches suffix
+		needle := pattern[1:]
+		return strings.HasSuffix(tableName, needle)
+	} else if strings.HasSuffix(pattern, "*") {
+		// foo* matches prefix
+		needle := pattern[:len(pattern)-1]
+		return strings.HasPrefix(tableName, needle)
+	}
+	return tableName == pattern
+}

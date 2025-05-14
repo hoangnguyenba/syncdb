@@ -500,26 +500,34 @@ func newImportCommand() *cobra.Command {
 				}
 				sortedTables := db.SortTablesByDependencies(currentTables, deps)
 
-				// Use exclusion lists from cmdArgs
-				excludeTables := cmdArgs.ExcludeTable            // Use cmdArgs
-				excludeTableSchema := cmdArgs.ExcludeTableSchema // Use cmdArgs
-				excludeTableData := cmdArgs.ExcludeTableData     // Use cmdArgs
-
 				// Create a map for faster lookup
 				excludeTableMap := make(map[string]bool)
 				excludeSchemaMap := make(map[string]bool)
 				excludeDataMap := make(map[string]bool)
 
-				for _, t := range excludeTables {
-					excludeTableMap[t] = true
+				// Expand table patterns
+				allTables, err := db.GetTables(conn)
+				if err != nil {
+					return fmt.Errorf("failed to get all tables: %v", err)
+				}
+				expandedInclude := expandTablePatterns(allTables, cmdArgs.Tables)
+				expandedExclude := expandTablePatterns(allTables, cmdArgs.ExcludeTable)
+				expandedExcludeSchema := expandTablePatterns(allTables, cmdArgs.ExcludeTableSchema)
+				expandedExcludeData := expandTablePatterns(allTables, cmdArgs.ExcludeTableData)
+
+				excludeTableMap = expandedExclude
+				excludeSchemaMap = expandedExcludeSchema
+				excludeDataMap = expandedExcludeData
+				for t := range excludeTableMap {
 					excludeSchemaMap[t] = true
 					excludeDataMap[t] = true
 				}
-				for _, t := range excludeTableSchema {
-					excludeSchemaMap[t] = true
-				}
-				for _, t := range excludeTableData {
-					excludeDataMap[t] = true
+
+				importTables := []string{}
+				for _, t := range sortedTables {
+					if !excludeTableMap[t] && (len(expandedInclude) == 0 || expandedInclude[t]) {
+						importTables = append(importTables, t)
+					}
 				}
 
 				// Import schema if requested
@@ -573,7 +581,7 @@ func newImportCommand() *cobra.Command {
 
 				// Import data if requested
 				if cmdArgs.IncludeData { // Use cmdArgs
-					for i, table := range sortedTables {
+					for i, table := range importTables {
 						if excludeDataMap[table] {
 							continue
 						}
