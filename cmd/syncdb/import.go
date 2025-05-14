@@ -500,24 +500,16 @@ func newImportCommand() *cobra.Command {
 				}
 				sortedTables := db.SortTablesByDependencies(currentTables, deps)
 
-				// Create a map for faster lookup
-				excludeTableMap := make(map[string]bool)
-				excludeSchemaMap := make(map[string]bool)
-				excludeDataMap := make(map[string]bool)
-
-				// Expand table patterns
+				// Create maps for faster lookup
 				allTables, err := db.GetTables(conn)
 				if err != nil {
 					return fmt.Errorf("failed to get all tables: %v", err)
 				}
-				expandedInclude := expandTablePatterns(allTables, cmdArgs.Tables)
-				expandedExclude := expandTablePatterns(allTables, cmdArgs.ExcludeTable)
-				expandedExcludeSchema := expandTablePatterns(allTables, cmdArgs.ExcludeTableSchema)
-				expandedExcludeData := expandTablePatterns(allTables, cmdArgs.ExcludeTableData)
 
-				excludeTableMap = expandedExclude
-				excludeSchemaMap = expandedExcludeSchema
-				excludeDataMap = expandedExcludeData
+				expandedInclude := expandTablePatterns(allTables, cmdArgs.Tables)
+				excludeTableMap := expandTablePatterns(allTables, cmdArgs.ExcludeTable)
+				excludeSchemaMap := expandTablePatterns(allTables, cmdArgs.ExcludeTableSchema)
+				excludeDataMap := expandTablePatterns(allTables, cmdArgs.ExcludeTableData)
 				for t := range excludeTableMap {
 					excludeSchemaMap[t] = true
 					excludeDataMap[t] = true
@@ -531,7 +523,7 @@ func newImportCommand() *cobra.Command {
 				}
 
 				// Import schema if requested
-				if cmdArgs.IncludeSchema { // Use cmdArgs
+				if cmdArgs.IncludeSchema {
 					// Read schema file directly
 					schemaFilePath := filepath.Join(importDir, "0_schema.sql")
 					schemaContent, err := os.ReadFile(schemaFilePath)
@@ -539,13 +531,10 @@ func newImportCommand() *cobra.Command {
 						return fmt.Errorf("failed to read schema file: %v", err)
 					}
 
-					// Execute schema directly
-					_, err = conn.DB.Exec(string(schemaContent))
-					if err != nil {
-						return fmt.Errorf("failed to execute schema: %v", err)
+					fmt.Printf("Importing schema from file (%d bytes)...\n", len(schemaContent))
+					if err := importSchema(conn, schemaContent); err != nil {
+						return fmt.Errorf("failed to import schema: %v", err)
 					}
-
-					fmt.Println("Schema imported successfully")
 				}
 
 				// Truncate tables if requested (regardless of whether schema import is enabled)
@@ -939,4 +928,140 @@ func decodeBase64Values(sql string) string {
 	})
 
 	return decoded
+}
+
+func importSchema(conn *db.Connection, schemaContent []byte) error {
+	// First pass: collect all CREATE TABLE statements
+	createTableStatements := make(map[string]string)
+	var currentStatement strings.Builder
+
+	lines := strings.Split(string(schemaContent), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+
+		currentStatement.WriteString(line)
+		currentStatement.WriteString("\n")
+
+		if strings.HasSuffix(line, ";") {
+			stmt := currentStatement.String()
+			if strings.Contains(strings.ToUpper(stmt), "CREATE TABLE") {
+				// Extract table name and validate it exists
+				tableName := extractTableNameFromSchema(stmt)
+				if tableName != "" {
+					createTableStatements[tableName] = stmt
+					fmt.Printf("Found CREATE TABLE for %s\n", tableName)
+				}
+			}
+			currentStatement.Reset()
+		}
+	}
+
+	if len(createTableStatements) == 0 {
+		return fmt.Errorf("no CREATE TABLE statements found in schema")
+	}
+
+	// Build dependency graph
+	deps := make(map[string][]string)
+	for tableName, stmt := range createTableStatements {
+		if strings.Contains(stmt, "FOREIGN KEY") {
+			// Look for all REFERENCES clauses
+			refRegex := regexp.MustCompile(`(?i)FOREIGN\s+KEY\s*\([^)]+\)\s*REFERENCES\s+[\x60"']?(\w+)[\x60"']?\s*\([^)]+\)`)
+			matches := refRegex.FindAllStringSubmatch(stmt, -1)
+			for _, match := range matches {
+				if len(match) > 1 {
+					referencedTable := match[1]
+					deps[tableName] = append(deps[tableName], referencedTable)
+					fmt.Printf("Table %s depends on %s\n", tableName, referencedTable)
+				}
+			}
+		}
+	}
+
+	// Sort tables by dependencies
+	var tables []string
+	for t := range createTableStatements {
+		tables = append(tables, t)
+	}
+	sortedTables := db.SortTablesByDependencies(tables, deps)
+
+	// Start a transaction for schema changes
+	tx, err := conn.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %v", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Execute statements in dependency order with retry mechanism
+	executedTables := make(map[string]bool)
+	maxRetries := 5
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		skippedTables := []string{}
+
+		for _, tableName := range sortedTables {
+			if executedTables[tableName] {
+				continue
+			}
+
+			// Check if all dependencies are met
+			canCreate := true
+			for _, dep := range deps[tableName] {
+				if !executedTables[dep] {
+					canCreate = false
+					break
+				}
+			}
+
+			if !canCreate {
+				skippedTables = append(skippedTables, tableName)
+				continue
+			}
+
+			stmt := createTableStatements[tableName]
+			fmt.Printf("Creating table %s... (attempt %d)\n", tableName, attempt+1)
+
+			// Try to create the table
+			_, err = tx.Exec(stmt)
+			if err != nil {
+				if strings.Contains(err.Error(), "Error 1824") ||
+					strings.Contains(err.Error(), "errno 150") ||
+					strings.Contains(strings.ToLower(err.Error()), "foreign key constraint fails") {
+					skippedTables = append(skippedTables, tableName)
+					fmt.Printf("Warning: Failed to create table %s (dependency issue), will retry\n", tableName)
+					continue
+				}
+				return fmt.Errorf("failed to create table %s: %v", tableName, err)
+			}
+
+			executedTables[tableName] = true
+			fmt.Printf("Successfully created table %s\n", tableName)
+		}
+
+		// If no tables were skipped or no progress was made, we're done
+		if len(skippedTables) == 0 {
+			break
+		}
+
+		// Check if we made any progress this iteration
+		if attempt > 0 && len(skippedTables) == len(sortedTables) {
+			return fmt.Errorf("failed to resolve table dependencies after %d attempts. Remaining tables: %v", attempt+1, skippedTables)
+		}
+
+		// Update sorted tables to only include remaining tables
+		sortedTables = skippedTables
+	}
+
+	// Commit transaction if all is well
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit schema changes: %v", err)
+	}
+
+	fmt.Printf("Schema import completed successfully. Created %d tables.\n", len(executedTables))
+	return nil
 }
