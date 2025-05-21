@@ -46,6 +46,7 @@ func newExportCommand() *cobra.Command {
 	// Add export-specific flags
 	flags := cmd.Flags()
 	flags.Int("batch-size", 500, "Number of records to process in a batch")
+	flags.Int("limit", 0, "Maximum number of records to export per table (0 means no limit)")
 
 	return cmd
 }
@@ -68,9 +69,10 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 		return nil, 0, nil, err // Return error from profile loading/parsing
 	}
 
-	// Get export-specific flags/config (batch-size is not part of profile)
-	// Use the simpler helper here as profile doesn't affect batch size
+	// Get export-specific flags/config (batch-size and limit are not part of profile)
+	// Use the simpler helper here as profile doesn't affect these values
 	batchSize := getIntFlagWithConfigFallback(cmd, "batch-size", cfg.Export.BatchSize)
+	cmdArgs.RecordLimit, _ = cmd.Flags().GetInt("limit") // Default is 0 (no limit)
 
 	// Validate required values (Database name should now be resolved considering profile)
 	if cmdArgs.Database == "" {
@@ -97,12 +99,13 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 	conn := &db.Connection{
 		DB: database,
 		Config: db.ConnectionConfig{
-			Driver:   cmdArgs.Driver,
-			Host:     cmdArgs.Host,
-			Port:     cmdArgs.Port,
-			User:     cmdArgs.Username,
-			Password: cmdArgs.Password,
-			Database: cmdArgs.Database,
+			Driver:      cmdArgs.Driver,
+			Host:        cmdArgs.Host,
+			Port:        cmdArgs.Port,
+			User:        cmdArgs.Username,
+			Password:    cmdArgs.Password,
+			Database:    cmdArgs.Database,
+			RecordLimit: cmdArgs.RecordLimit,
 		},
 	}
 
@@ -416,8 +419,8 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 	}
 
 	// Write data to file
-	// Use tableIndex+1 for 1-based file numbering consistent with original logic
-	dataFile := filepath.Join(exportPath, fmt.Sprintf("%d_%s.sql", tableIndex+1, table))
+	// Use tableIndex directly since it's already 1-based
+	dataFile := filepath.Join(exportPath, fmt.Sprintf("%d_%s.sql", tableIndex, table))
 	if err := os.WriteFile(dataFile, []byte(strings.Join(sqlStatements, "\n\n")), 0644); err != nil {
 		return 0, fmt.Errorf("failed to write data file for table %s (%s): %v", table, dataFile, err)
 	}
@@ -444,7 +447,7 @@ func writeDataFiles(conn *db.Connection, exportPath string, cmdArgs *CommonArgs,
 			return totalRecords, fmt.Errorf("error exporting data for table %s: %v", table, err) // Stop on error
 		}
 		totalRecords += recordsWritten
-		fileIndex++ // Increment for next file
+		fileIndex++ // Increment only for non-excluded tables
 	}
 	return totalRecords, nil
 }

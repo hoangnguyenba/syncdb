@@ -71,6 +71,7 @@ type CommonArgs struct {
 	ExcludeTable       []string
 	ExcludeTableSchema []string
 	ExcludeTableData   []string
+	RecordLimit        int // Maximum number of records to export per table (0 means no limit)
 }
 
 // addProfileConfigFlags adds flags to a command for all fields in ProfileConfig.

@@ -33,6 +33,9 @@ func ExportTableData(conn *Connection, tableName string, writer io.Writer) error
 		escapedColumns[i] = EscapeIdentifier(conn.Config.Driver, col)
 	}
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(escapedColumns, ", "), EscapeIdentifier(conn.Config.Driver, tableName))
+	if conn.Config.RecordLimit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", conn.Config.RecordLimit)
+	}
 	rows, err := conn.DB.Query(query)
 	if err != nil {
 		return fmt.Errorf("failed to query data: %w", err)

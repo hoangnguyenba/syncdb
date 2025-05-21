@@ -572,7 +572,7 @@ func newImportCommand() *cobra.Command {
 
 				// Import data if requested
 				if cmdArgs.IncludeData { // Use cmdArgs
-					for i, table := range importTables {
+					for _, table := range importTables {
 						if excludeDataMap[table] {
 							continue
 						}
@@ -594,31 +594,43 @@ func newImportCommand() *cobra.Command {
 
 						fmt.Printf("\nImporting data for table %s...\n", table)
 
-						// Use base64 flag from cmdArgs
-						useBase64 := cmdArgs.Base64 // Use cmdArgs
+						// Find the index of the table in metadata
+						tableIndex := -1
+						var metadata struct {
+							Tables []string `json:"tables"`
+						}
 
-						// Read metadata file to check if export was done with base64
+						// Read metadata to find correct file number
 						metadataFile := filepath.Join(importDir, "0_metadata.json")
 						metadataBytes, err := os.ReadFile(metadataFile)
-						if err == nil {
-							var metadata struct {
-								Base64 bool `json:"base64"`
-							}
-							if err := json.Unmarshal(metadataBytes, &metadata); err == nil {
-								// If metadata has base64 flag set to true, override the flag
-								if metadata.Base64 {
-									fmt.Println("Metadata indicates base64 encoding was used during export. Enabling base64 decoding automatically.")
-									useBase64 = true
-								}
+						if err != nil {
+							return fmt.Errorf("failed to read metadata file: %v", err)
+						}
+						if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+							return fmt.Errorf("failed to parse metadata file: %v", err)
+						}
+
+						// Find table's position in exported order
+						for i, t := range metadata.Tables {
+							if t == table {
+								tableIndex = i + 1 // Use 1-based index as files are numbered from 1
+								break
 							}
 						}
 
-						// Read SQL file content
-						sqlFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table))
+						if tableIndex == -1 {
+							return fmt.Errorf("table %s not found in metadata", table)
+						}
+
+						// Read SQL file content with correct file number
+						sqlFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", tableIndex, table))
 						sqlBytes, err := os.ReadFile(sqlFile)
 						if err != nil {
 							return fmt.Errorf("failed to read SQL file %s: %v", sqlFile, err)
 						}
+
+						// Get the base64 flag value from cmdArgs
+						useBase64 := cmdArgs.Base64
 
 						// Convert to string for processing
 						sqlContent := string(sqlBytes)

@@ -11,13 +11,14 @@ import (
 
 // ConnectionConfig contains configuration for a database connection
 type ConnectionConfig struct {
-	Driver   string
-	Host     string
-	Port     int
-	User     string
-	Password string
-	Database string
-	Timeout  time.Duration
+	Driver      string
+	Host        string
+	Port        int
+	User        string
+	Password    string
+	Database    string
+	Timeout     time.Duration
+	RecordLimit int // Maximum number of records to export per table (0 means no limit)
 }
 
 // Connection represents a database connection
