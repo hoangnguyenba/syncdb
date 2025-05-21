@@ -884,10 +884,8 @@ func newImportCommand() *cobra.Command {
 
 	// Add import-specific flags
 	flags := cmd.Flags()
-	// flags.StringP("path", "i", "", "Path to import files or zip file") // This seems redundant with folder-path/file-path? Keeping for now.
-	flags.String("s3-key", "", "S3 key (path to zip file)") // Appears unused, but keeping definition
+	flags.String("s3-key", "", "S3 key (path to zip file)")
 	flags.Bool("truncate", false, "Truncate tables before importing")
-	flags.Bool("skip-schema", false, "Skip schema import (only import data)") // Appears unused, but keeping definition
 	flags.String("file-path", "", "File path to import from (alternative to folder-path)")
 
 	return cmd

@@ -11,24 +11,24 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 	flags := cmd.Flags()
 
 	// Database connection flags
-	flags.StringP("host", "H", "localhost", "Database host")
-	flags.IntP("port", "P", 3306, "Database port")
+	flags.StringP("host", "H", "", "Database host")
+	flags.IntP("port", "P", 0, "Database port")
 	flags.StringP("username", "u", "", "Database username")
 	flags.StringP("password", "p", "", "Database password")
 	flags.StringP("database", "d", "", "Database name")
-	flags.StringP("driver", "D", "mysql", "Database driver (mysql, postgres)")
+	flags.StringP("driver", "D", "", "Database driver (mysql, postgres)")
 
 	// Table selection flags (different short flag for export)
 	flags.StringSliceP("tables", "t", []string{}, "Tables to export (comma-separated)")
 
 	// Path and Storage flags
 	flags.StringP("folder-path", "o", "", "Folder path for export files or temporary import files")
-	flags.StringP("storage", "s", "local", "Storage type (local, s3)")
+	flags.StringP("storage", "s", "", "Storage type (local, s3)")
 	flags.String("s3-bucket", "", "S3 bucket name")
 	flags.String("s3-region", "", "S3 region")
 
 	// Content flags (different defaults)
-	flags.Bool("include-schema", true, "Include schema in operation")
+	flags.Bool("include-schema", false, "Include schema in operation")
 	flags.Bool("include-data", true, "Include table data in operation")
 	flags.Bool("include-view-data", false, "Include view data in operation")
 
@@ -38,7 +38,7 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 	flags.StringSlice("exclude-table-data", []string{}, "Tables to exclude data from operation")
 
 	// Format/Encoding flags (different defaults, short flag, description)
-	flags.StringP("format", "f", "sql", "Export format (sql, json)")
+	flags.StringP("format", "f", "", "Export format (sql, json)")
 	flags.Bool("base64", false, "Encode string values in base64 format during export")
 
 	// Zip flag (different defaults)
