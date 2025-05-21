@@ -189,6 +189,7 @@ func newImportCommand() *cobra.Command {
 
 			// Get import-specific flags
 			truncate, _ := cmd.Flags().GetBool("truncate")
+			dropDatabase, _ := cmd.Flags().GetBool("drop-database")
 			filePath := getStringFlagWithConfigFallback(cmd, "file-path", cfg.Import.Filepath) // File path is not part of profile
 
 			// Initialize storage (Storage settings are not part of profile)
@@ -459,10 +460,50 @@ func newImportCommand() *cobra.Command {
 							return err
 						}
 					}
+				} // Drop and recreate database if requested
+				if dropDatabase {
+					fmt.Printf("Dropping database %s...\n", cmdArgs.Database)
+					// Connect to server without database to drop/create
+					serverConn, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, "")
+					if err != nil {
+						return fmt.Errorf("failed to connect to server: %v", err)
+					}
+
+					// Use appropriate escaping based on driver
+					var dropSQL, createSQL string
+					if cmdArgs.Driver == "mysql" {
+						dropSQL = fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", cmdArgs.Database)
+						createSQL = fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", cmdArgs.Database)
+					} else {
+						// PostgreSQL uses double quotes for identifiers
+						dropSQL = fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, cmdArgs.Database)
+						createSQL = fmt.Sprintf(`CREATE DATABASE "%s" ENCODING = 'UTF8' LC_COLLATE = 'en_US.UTF-8' LC_CTYPE = 'en_US.UTF-8' TEMPLATE = template0`, cmdArgs.Database)
+					}
+
+					// Drop database if exists
+					fmt.Printf("Dropping database if exists...\n")
+					if _, err := serverConn.Exec(dropSQL); err != nil {
+						serverConn.Close()
+						return fmt.Errorf("failed to drop database: %v", err)
+					}
+
+					// Create database
+					fmt.Printf("Creating new database...\n")
+					if _, err := serverConn.Exec(createSQL); err != nil {
+						serverConn.Close()
+						return fmt.Errorf("failed to create database: %v", err)
+					}
+
+					serverConn.Close()
+					fmt.Printf("Database %s dropped and recreated successfully\n", cmdArgs.Database)
+
+					// Brief pause to allow database server to catch up
+					time.Sleep(1 * time.Second)
 				}
 
 				// Initialize database connection
-				database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database) // Use cmdArgs
+				fmt.Printf("Connecting to database %s...\n", cmdArgs.Database)
+				database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database)
 				if err != nil {
 					return fmt.Errorf("failed to connect to database: %v", err)
 				}
@@ -472,17 +513,17 @@ func newImportCommand() *cobra.Command {
 				conn := &db.Connection{
 					DB: database,
 					Config: db.ConnectionConfig{
-						Driver:   cmdArgs.Driver,   // Use cmdArgs
-						Host:     cmdArgs.Host,     // Use cmdArgs
-						Port:     cmdArgs.Port,     // Use cmdArgs
-						User:     cmdArgs.Username, // Use cmdArgs
-						Password: cmdArgs.Password, // Use cmdArgs
-						Database: cmdArgs.Database, // Use cmdArgs
+						Driver:   cmdArgs.Driver,
+						Host:     cmdArgs.Host,
+						Port:     cmdArgs.Port,
+						User:     cmdArgs.Username,
+						Password: cmdArgs.Password,
+						Database: cmdArgs.Database,
 					},
 				}
 
 				// Use tables from cmdArgs
-				currentTables := cmdArgs.Tables // Use cmdArgs
+				currentTables := cmdArgs.Tables
 				if len(currentTables) == 0 {
 					currentTables, err = db.GetTables(conn)
 					if err != nil {
@@ -772,6 +813,8 @@ func newImportCommand() *cobra.Command {
 				return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", cmdArgs.Format) // Use cmdArgs
 			}
 
+			// Already handled database drop/recreate at the beginning of command
+
 			// Initialize database connection
 			database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database) // Use cmdArgs
 			if err != nil {
@@ -886,6 +929,7 @@ func newImportCommand() *cobra.Command {
 	flags := cmd.Flags()
 	flags.String("s3-key", "", "S3 key (path to zip file)")
 	flags.Bool("truncate", false, "Truncate tables before importing")
+	flags.Bool("drop-database", false, "Drop and recreate database before importing")
 	flags.String("file-path", "", "File path to import from (alternative to folder-path)")
 
 	return cmd
