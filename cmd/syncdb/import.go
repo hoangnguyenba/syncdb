@@ -455,10 +455,16 @@ func newImportCommand() *cobra.Command {
 						}
 					} else { // Local storage, not zip
 						// Get latest timestamp directory locally
-						importDir, err = getLatestTimestampDir(cmdArgs.FolderPath, cmdArgs.Database) // Use cmdArgs
+						absPath, err := filepath.Abs(cmdArgs.FolderPath)
 						if err != nil {
-							return err
+							return fmt.Errorf("failed to get absolute path for '%s': %v", cmdArgs.FolderPath, err)
 						}
+						fmt.Printf("Looking for latest timestamp directory in: %s\n", absPath)
+						importDir, err = getLatestTimestampDir(absPath, cmdArgs.Database)
+						if err != nil {
+							return fmt.Errorf("failed to get latest timestamp directory: %v", err)
+						}
+						fmt.Printf("Found latest timestamp directory: %s\n", importDir)
 					}
 				} // Drop and recreate database if requested
 				if dropDatabase {
@@ -556,12 +562,28 @@ func newImportCommand() *cobra.Command {
 					excludeDataMap[t] = true
 				}
 
+				// Read metadata to get list of tables to import
+				var metadata struct {
+					Tables []string `json:"tables"`
+				}
+				metadataFile := filepath.Join(importDir, "0_metadata.json")
+				fmt.Printf("Reading metadata file from: %s\n", metadataFile)
+				metadataBytes, err := os.ReadFile(metadataFile)
+				if err != nil {
+					return fmt.Errorf("failed to read metadata file: %v", err)
+				}
+				if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+					return fmt.Errorf("failed to parse metadata file: %v", err)
+				}
+				fmt.Printf("Found %d tables in metadata\n", len(metadata.Tables))
+
 				importTables := []string{}
-				for _, t := range sortedTables {
+				for _, t := range metadata.Tables {
 					if !excludeTableMap[t] && (len(expandedInclude) == 0 || expandedInclude[t]) {
 						importTables = append(importTables, t)
 					}
 				}
+				fmt.Printf("Will import %d tables\n", len(importTables))
 
 				// Import schema if requested
 				if cmdArgs.IncludeSchema {
@@ -612,9 +634,11 @@ func newImportCommand() *cobra.Command {
 				}
 
 				// Import data if requested
+				fmt.Printf("\nChecking data import flags: IncludeData=%v, len(importTables)=%d\n", cmdArgs.IncludeData, len(importTables))
 				if cmdArgs.IncludeData { // Use cmdArgs
 					for _, table := range importTables {
 						if excludeDataMap[table] {
+							fmt.Printf("Skipping excluded table: %s\n", table)
 							continue
 						}
 
@@ -630,6 +654,7 @@ func newImportCommand() *cobra.Command {
 						}
 
 						if isView && !cmdArgs.IncludeViewData { // Use cmdArgs
+							fmt.Printf("Skipping view: %s (IncludeViewData=%v)\n", table, cmdArgs.IncludeViewData)
 							continue
 						}
 
@@ -652,9 +677,11 @@ func newImportCommand() *cobra.Command {
 						}
 
 						// Find table's position in exported order
+						fmt.Printf("Looking for table '%s' in metadata.Tables list...\n", table)
 						for i, t := range metadata.Tables {
 							if t == table {
 								tableIndex = i + 1 // Use 1-based index as files are numbered from 1
+								fmt.Printf("Found table '%s' at index %d\n", table, tableIndex)
 								break
 							}
 						}
@@ -665,10 +692,12 @@ func newImportCommand() *cobra.Command {
 
 						// Read SQL file content with correct file number
 						sqlFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", tableIndex, table))
+						fmt.Printf("Attempting to read SQL file: %s\n", sqlFile)
 						sqlBytes, err := os.ReadFile(sqlFile)
 						if err != nil {
 							return fmt.Errorf("failed to read SQL file %s: %v", sqlFile, err)
 						}
+						fmt.Printf("Successfully read %d bytes from %s\n", len(sqlBytes), sqlFile)
 
 						// Get the base64 flag value from cmdArgs
 						useBase64 := cmdArgs.Base64
