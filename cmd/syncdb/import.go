@@ -36,32 +36,36 @@ func getLatestTimestampDir(basePath string, dbName string) (string, error) {
 
 	var latestTime time.Time
 	var latestDir string
+	prefix := dbName + "_"
+	timestampLayout := "20060102_150405"
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-
-		// Try to parse directory name as timestamp
-		dirTime, err := time.Parse("20060102_150405", entry.Name())
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		ts := strings.TrimPrefix(name, prefix)
+		dirTime, err := time.Parse(timestampLayout, ts)
 		if err != nil {
 			continue
 		}
-
 		if latestDir == "" || dirTime.After(latestTime) {
 			latestTime = dirTime
-			latestDir = entry.Name()
+			latestDir = name
 		}
 	}
 
 	if latestDir == "" {
-		return "", fmt.Errorf("no valid timestamp directories found in %s", basePath)
+		return "", fmt.Errorf("no valid timestamp directories found in %s with prefix %s", basePath, prefix)
 	}
 
 	return filepath.Join(basePath, latestDir), nil
 }
 
-func getLatestZipFile(basePath string) (string, error) {
+func getLatestZipFile(basePath string, dbName string) (string, error) {
 	// Check if base directory exists
 	if _, err := os.Stat(basePath); os.IsNotExist(err) {
 		return "", fmt.Errorf("base directory not found: %s", basePath)
@@ -75,32 +79,31 @@ func getLatestZipFile(basePath string) (string, error) {
 
 	var latestTime time.Time
 	var latestZip string
+	prefix := dbName + "_"
+	timestampLayout := "20060102_150405"
 
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 
-		// Check if file is a zip file
-		if !strings.HasSuffix(entry.Name(), ".zip") {
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".zip") {
 			continue
 		}
-
-		// Try to parse filename (without .zip) as timestamp
-		timestamp := strings.TrimSuffix(entry.Name(), ".zip")
-		fileTime, err := time.Parse("20060102_150405", timestamp)
+		ts := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".zip")
+		fileTime, err := time.Parse(timestampLayout, ts)
 		if err != nil {
 			continue
 		}
-
 		if latestZip == "" || fileTime.After(latestTime) {
 			latestTime = fileTime
-			latestZip = entry.Name()
+			latestZip = name
 		}
 	}
 
 	if latestZip == "" {
-		return "", fmt.Errorf("no valid zip files found in %s", basePath)
+		return "", fmt.Errorf("no valid zip files found in %s with prefix %s", basePath, prefix)
 	}
 
 	return filepath.Join(basePath, latestZip), nil
@@ -318,7 +321,7 @@ func newImportCommand() *cobra.Command {
 						fmt.Println()
 					} else { // Local storage
 						// Find latest zip file locally
-						zipFile, err := getLatestZipFile(cmdArgs.FolderPath) // Use cmdArgs
+						zipFile, err := getLatestZipFile(cmdArgs.FolderPath, cmdArgs.Database) // Use cmdArgs
 						if err != nil {
 							return err
 						}
