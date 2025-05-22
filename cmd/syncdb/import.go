@@ -935,7 +935,7 @@ func newImportCommand() *cobra.Command {
 					}
 				}
 
-				if err := db.ImportTableData(conn, table, &buf); err != nil {
+				if err := db.ImportTableData(conn, table, &buf, cmdArgs.DisableForeignKeyCheck); err != nil {
 					return fmt.Errorf("failed to import data to table %s: %v", table, err)
 				}
 
@@ -960,6 +960,7 @@ func newImportCommand() *cobra.Command {
 	flags.Bool("truncate", false, "Truncate tables before importing")
 	flags.Bool("drop-database", false, "Drop and recreate database before importing")
 	flags.String("file-path", "", "File path to import from (alternative to folder-path)")
+	flags.Bool("disable-foreign-key-check", true, "Temporarily disable foreign key checks during import")
 
 	return cmd
 }

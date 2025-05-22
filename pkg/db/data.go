@@ -111,8 +111,40 @@ func ExportTableData(conn *Connection, tableName string, writer io.Writer) error
 	return nil
 }
 
+// setForeignKeyChecks enables or disables foreign key checks in MySQL
+func setForeignKeyChecks(conn *Connection, enabled bool) error {
+	if conn.Config.Driver != "mysql" {
+		return nil // Only applies to MySQL
+	}
+
+	value := 1
+	if !enabled {
+		value = 0
+	}
+
+	_, err := conn.DB.Exec(fmt.Sprintf("SET FOREIGN_KEY_CHECKS = %d", value))
+	if err != nil {
+		return fmt.Errorf("failed to set foreign_key_checks to %d: %w", value, err)
+	}
+
+	return nil
+}
+
 // ImportTableData imports data into a table from a reader
-func ImportTableData(conn *Connection, tableName string, reader io.Reader) error {
+func ImportTableData(conn *Connection, tableName string, reader io.Reader, disableForeignKeyCheck bool) error {
+	// Only relevant for MySQL
+	if disableForeignKeyCheck {
+		if err := setForeignKeyChecks(conn, false); err != nil {
+			return fmt.Errorf("failed to disable foreign key checks: %w", err)
+		}
+		// Re-enable foreign key checks when the function returns
+		defer func() {
+			if err := setForeignKeyChecks(conn, true); err != nil {
+				fmt.Printf("Warning: failed to re-enable foreign key checks: %v\n", err)
+			}
+		}()
+	}
+
 	decoder := json.NewDecoder(reader)
 	for {
 		var op DataOperation

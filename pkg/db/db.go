@@ -29,8 +29,8 @@ func (db *Database) ExportTable(tableName string, writer io.Writer) error {
 }
 
 // ImportTable imports data into a table from a reader
-func (db *Database) ImportTable(tableName string, reader io.Reader) error {
-	return ImportTableData(db.Conn, tableName, reader)
+func (db *Database) ImportTable(tableName string, reader io.Reader, disableForeignKeyCheck bool) error {
+	return ImportTableData(db.Conn, tableName, reader, disableForeignKeyCheck)
 }
 
 // GetTableInfo retrieves information about a table
