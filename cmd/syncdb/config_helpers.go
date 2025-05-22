@@ -227,6 +227,9 @@ func populateCommonArgsFromFlagsAndConfig(cmd *cobra.Command, cfg config.CommonC
 	// Note: The 'Condition' field from the profile (loadedProfile.Condition) is not directly mapped to CommonArgs.
 	// We leave it for specific handling in export.go
 
+	// FileName: only from flag, not from config/profile
+	args.FileName, _ = cmd.Flags().GetString("file-name")
+
 	return args, nil
 }
 

@@ -47,6 +47,7 @@ func newExportCommand() *cobra.Command {
 	flags := cmd.Flags()
 	flags.Int("batch-size", 500, "Number of records to process in a batch")
 	flags.Int("limit", 0, "Maximum number of records to export per table (0 means no limit)")
+	flags.String("file-name", "", "Name for export folder/zip (default: {database name}_yyyymmdd_hhmmss)")
 
 	return cmd
 }
@@ -639,7 +640,12 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 
 	// Create timestamp for folder
 	timestamp := time.Now().Format("20060102_150405")
-	exportPath := filepath.Join(cmdArgs.FolderPath, timestamp) // Use cmdArgs.FolderPath
+	fileName := cmdArgs.FileName
+	if fileName == "" {
+		fileName = fmt.Sprintf("%s_%s", cmdArgs.Database, timestamp)
+	}
+
+	exportPath := filepath.Join(cmdArgs.FolderPath, fileName) // Use fileName for export folder
 
 	// Create directory structure
 	if err = os.MkdirAll(exportPath, 0755); err != nil {
@@ -681,7 +687,7 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 
 	// Handle Zipping
 	if cmdArgs.Zip {
-		zipFileName = filepath.Join(cmdArgs.FolderPath, timestamp+".zip")
+		zipFileName = filepath.Join(cmdArgs.FolderPath, fileName+".zip")
 		if err = createZipArchive(exportPath, zipFileName); err != nil {
 			cleanupLocalFiles(exportPath, zipFileName) // Clean up dir and potentially partial zip
 			return err                                 // Error already formatted by createZipArchive
@@ -699,7 +705,7 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 			isDirectory = false
 		}
 
-		if err = uploadToS3(uploadPath, isDirectory, cmdArgs, timestamp); err != nil {
+		if err = uploadToS3(uploadPath, isDirectory, cmdArgs, fileName); err != nil {
 			// S3 upload failed. Don't clean up local files automatically.
 			// User might want to retry or keep the local copy.
 			fmt.Printf("S3 Upload failed: %v\n", err)
