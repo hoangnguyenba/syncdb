@@ -749,6 +749,9 @@ func newImportCommand() *cobra.Command {
 				return fmt.Errorf("failed to read file: %v", err)
 			}
 
+			// Retrieve query separator before switch
+			querySeparator := getStringFlagWithConfigFallback(cmd, "query-separator", "--SYNCDB_QUERY_SEPARATOR--")
+
 			var importData ExportData // Assuming ExportData struct is still relevant here
 
 			switch cmdArgs.Format { // Use cmdArgs.Format
@@ -758,7 +761,8 @@ func newImportCommand() *cobra.Command {
 				}
 			case "sql":
 				// Parse SQL file
-				sqlStatements := strings.Split(string(fileData), "\n\n")
+				// Use the custom query separator instead of \n\n
+				sqlStatements := strings.Split(string(fileData), querySeparator)
 				importData = ExportData{
 					Data: make(map[string][]map[string]interface{}),
 				}
@@ -964,6 +968,7 @@ func newImportCommand() *cobra.Command {
 	flags.Bool("drop-database", false, "Drop and recreate database before importing")
 	flags.String("file-path", "", "File path to import from (alternative to folder-path)")
 	flags.Bool("disable-foreign-key-check", true, "Temporarily disable foreign key checks during import")
+	flags.String("query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n", "String used to separate SQL queries in import file (default: \\n--SYNCDB_QUERY_SEPARATOR--\\n)")
 
 	return cmd
 }

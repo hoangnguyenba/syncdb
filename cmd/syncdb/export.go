@@ -48,6 +48,7 @@ func newExportCommand() *cobra.Command {
 	flags.Int("batch-size", 500, "Number of records to process in a batch")
 	flags.Int("limit", 0, "Maximum number of records to export per table (0 means no limit)")
 	flags.String("file-name", "", "Name for export folder/zip (default: {database name}_yyyymmdd_hhmmss)")
+	flags.String("query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n", "String used to separate SQL queries in export file (default: \\n--SYNCDB_QUERY_SEPARATOR--\\n)")
 
 	return cmd
 }
@@ -391,7 +392,7 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 							encodedValue := base64.StdEncoding.EncodeToString(v)
 							values[j] = fmt.Sprintf("'%s'", encodedValue)
 						} else {
-							// Representing raw bytes in SQL is tricky. Hex is common.
+							// Representing raw bytes in SQL is tricky.
 							// For simplicity, maybe return error or require base64 for blobs?
 							// Or use a placeholder/warning.
 							// For now, let's assume base64 is preferred for binary.
@@ -422,7 +423,13 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 	// Write data to file
 	// Use tableIndex directly since it's already 1-based
 	dataFile := filepath.Join(exportPath, fmt.Sprintf("%d_%s.sql", tableIndex, table))
-	if err := os.WriteFile(dataFile, []byte(strings.Join(sqlStatements, "\n\n")), 0644); err != nil {
+
+	// Use query separator for compatibility with import
+	separator := "\n--SYNCDB_QUERY_SEPARATOR--\n"
+	if cmdArgs.QuerySeparator != "" {
+		separator = cmdArgs.QuerySeparator
+	}
+	if err := os.WriteFile(dataFile, []byte(strings.Join(sqlStatements, separator)), 0644); err != nil {
 		return 0, fmt.Errorf("failed to write data file for table %s (%s): %v", table, dataFile, err)
 	}
 

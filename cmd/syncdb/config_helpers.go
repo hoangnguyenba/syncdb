@@ -229,7 +229,7 @@ func populateCommonArgsFromFlagsAndConfig(cmd *cobra.Command, cfg config.CommonC
 
 	// FileName: only from flag, not from config/profile
 	args.FileName, _ = cmd.Flags().GetString("file-name")
-
+	args.QuerySeparator = getStringFlagWithConfigFallback(cmd, "query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n")
 	return args, nil
 }
 

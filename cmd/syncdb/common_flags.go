@@ -74,6 +74,7 @@ type CommonArgs struct {
 	RecordLimit            int    // Maximum number of records to export per table (0 means no limit)
 	DisableForeignKeyCheck bool   // Temporarily disable foreign key checks during import
 	FileName               string // Name for export folder/zip (default: {database name}_yyyymmdd_hhmmss)
+	QuerySeparator         string // String used to separate SQL queries in export/import
 }
 
 // addProfileConfigFlags adds flags to a command for all fields in ProfileConfig.
