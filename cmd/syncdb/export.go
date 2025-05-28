@@ -376,8 +376,9 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 							encodedValue := base64.StdEncoding.EncodeToString([]byte(v))
 							values[j] = fmt.Sprintf("'%s'", encodedValue) // Assuming base64 strings are safe for SQL literals
 						} else {
-							escapedString := strings.ReplaceAll(v, "'", "''")
-							// escapedString = strings.ReplaceAll(escapedString, "\\", "\\\\") // Consider if needed
+							// escapedString := strings.ReplaceAll(v, "\\", "\\\\")            // Escape backslashes first
+							escapedString := strings.ReplaceAll(v, "'", "''") // Then escape single quotes
+							// escapedString = strings.ReplaceAll(escapedString, "\"", "\\\"") // Then escape double quotes
 							values[j] = fmt.Sprintf("'%s'", escapedString)
 						}
 					case time.Time:
@@ -416,8 +417,12 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 		}
 
 		// Complete the statement for the batch
-		insertStmt += strings.Join(valueStrings, ",\n") + ";"
-		sqlStatements = append(sqlStatements, insertStmt)
+		// Make sure statement ends with semicolon if not already present
+		stmt := insertStmt + strings.Join(valueStrings, ",\n")
+		if !strings.HasSuffix(strings.TrimSpace(stmt), ";") {
+			stmt += ";"
+		}
+		sqlStatements = append(sqlStatements, stmt)
 	}
 
 	// Write data to file
@@ -429,7 +434,11 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 	if cmdArgs.QuerySeparator != "" {
 		separator = cmdArgs.QuerySeparator
 	}
-	if err := os.WriteFile(dataFile, []byte(strings.Join(sqlStatements, separator)), 0644); err != nil {
+
+	// Join statements with separator, ensuring each statement has a semicolon
+	finalContent := strings.Join(sqlStatements, separator)
+
+	if err := os.WriteFile(dataFile, []byte(finalContent), 0644); err != nil {
 		return 0, fmt.Errorf("failed to write data file for table %s (%s): %v", table, dataFile, err)
 	}
 

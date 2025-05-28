@@ -713,8 +713,11 @@ func newImportCommand() *cobra.Command {
 							sqlContent = decodeBase64Values(sqlContent)
 						}
 
-						// Split into individual SQL statements
-						sqlStatements := strings.Split(sqlContent, ";")
+						// Get query separator
+						querySeparator := getStringFlagWithConfigFallback(cmd, "query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n")
+
+						// Split into individual SQL statements using the query separator
+						sqlStatements := strings.Split(sqlContent, querySeparator)
 
 						// Execute each statement separately
 						for _, stmt := range sqlStatements {
@@ -723,7 +726,12 @@ func newImportCommand() *cobra.Command {
 								continue
 							}
 
-							_, err = conn.DB.Exec(stmt + ";")
+							// Add back the semicolon for proper MySQL execution
+							if !strings.HasSuffix(stmt, ";") {
+								stmt += ";"
+							}
+
+							_, err = conn.DB.Exec(stmt)
 							if err != nil {
 								return fmt.Errorf("failed to import data to table %s: %v", table, err)
 							}
@@ -750,7 +758,7 @@ func newImportCommand() *cobra.Command {
 			}
 
 			// Retrieve query separator before switch
-			querySeparator := getStringFlagWithConfigFallback(cmd, "query-separator", "--SYNCDB_QUERY_SEPARATOR--")
+			querySeparator := getStringFlagWithConfigFallback(cmd, "query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n")
 
 			var importData ExportData // Assuming ExportData struct is still relevant here
 
