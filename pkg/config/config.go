@@ -16,9 +16,8 @@ type CommonConfig struct {
 	Password           string
 	Database           string
 	Tables             []string
-	Filepath           string // Note: Filepath might be less relevant now with folder-path focus
+	Path               string // Path for export/import files
 	Format             string
-	FolderPath         string
 	ExcludeTable       []string
 	ExcludeTableSchema []string
 	ExcludeTableData   []string
@@ -48,9 +47,8 @@ func loadCommonConfig(prefix string) CommonConfig {
 	cfg.Username = getViperString(prefix+"username", "")
 	cfg.Password = getViperString(prefix+"password", "")
 	cfg.Database = getViperString(prefix+"database", "")
-	cfg.Filepath = getViperString(prefix+"filepath", "") // Keep for potential backward compatibility?
 	cfg.Format = getViperString(prefix+"format", "sql") // Default 'sql' might need adjustment based on context
-	cfg.FolderPath = getViperString(prefix+"folder_path", "")
+	cfg.Path = getViperString(prefix+"path", "")
 	cfg.S3Bucket = getViperString(prefix+"s3_bucket", "")
 	cfg.S3Region = getViperString(prefix+"s3_region", "")
 	cfg.Storage = getViperString(prefix+"storage", "local")

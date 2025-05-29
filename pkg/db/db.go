@@ -360,3 +360,123 @@ func IsView(conn *Connection, tableName string) (bool, error) {
 func GetTableRowCount(conn *Connection, tableName string) (int64, error) {
 	return countTableRowCount(conn.DB, tableName)
 }
+
+// DropDatabase drops an existing database
+func DropDatabase(conn *Connection) error {
+	// Get current database name
+	dbName := conn.Config.Database
+
+	// Create a temporary connection without database specified to allow dropping
+	tempConn, err := InitDB(conn.Config.Driver, conn.Config.Host, conn.Config.Port,
+		conn.Config.User, conn.Config.Password, "") // Empty database name
+	if err != nil {
+		return fmt.Errorf("failed to create temporary connection for dropping database: %v", err)
+	}
+	defer tempConn.Close()
+
+	// Drop database
+	query := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName)
+	_, err = tempConn.Exec(query)
+	if err != nil {
+		return fmt.Errorf("failed to drop database %s: %v", dbName, err)
+	}
+
+	return nil
+}
+
+// CreateDatabase creates a new database
+func CreateDatabase(conn *Connection) error {
+	// Get current database name
+	dbName := conn.Config.Database
+
+	// Create a temporary connection without database specified to allow creation
+	tempConn, err := InitDB(conn.Config.Driver, conn.Config.Host, conn.Config.Port,
+		conn.Config.User, conn.Config.Password, "") // Empty database name
+	if err != nil {
+		return fmt.Errorf("failed to create temporary connection for creating database: %v", err)
+	}
+	defer tempConn.Close()
+
+	// Create database
+	query := fmt.Sprintf("CREATE DATABASE `%s`", dbName)
+	_, err = tempConn.Exec(query)
+	if err != nil {
+		return fmt.Errorf("failed to create database %s: %v", dbName, err)
+	}
+
+	return nil
+}
+
+// ExecuteSchema executes a schema definition SQL script
+func ExecuteSchema(conn *Connection, schemaSQL string) error {
+	// Split by semicolons to handle multiple statements
+	statements := strings.Split(schemaSQL, ";")
+
+	// Start a transaction for schema changes
+	tx, err := conn.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %v", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for _, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+
+		// Execute the schema statement
+		_, err = tx.Exec(stmt)
+		if err != nil {
+			return fmt.Errorf("failed to execute schema statement: %v\nStatement: %s", err, stmt)
+		}
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit schema changes: %v", err)
+	}
+
+	return nil
+}
+
+// ExecuteData executes data import SQL statements
+func ExecuteData(conn *Connection, dataSQL string) error {
+	separator := "\n--SYNCDB_QUERY_SEPARATOR--\n"
+	statements := strings.Split(dataSQL, separator)
+
+	// Start a transaction for data import
+	tx, err := conn.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start data import transaction: %v", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for _, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+
+		// Execute the data statement
+		_, err = tx.Exec(stmt)
+		if err != nil {
+			return fmt.Errorf("failed to execute data statement: %v\nStatement: %s", err, stmt)
+		}
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit data import: %v", err)
+	}
+
+	return nil
+}

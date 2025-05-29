@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/zip"
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,11 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/hoangnguyenba/syncdb/pkg/config"
 	"github.com/hoangnguyenba/syncdb/pkg/db"
 	"github.com/hoangnguyenba/syncdb/pkg/storage"
 	"github.com/spf13/cobra"
@@ -169,799 +166,185 @@ func unzipFile(zipPath string, destPath string) error {
 	return nil
 }
 
+func getImportPath(cmdArgs *CommonArgs) (string, error) {
+	// If path is a directory and contains metadata file, use it directly
+	if storage.IsExportPath(cmdArgs.Path) {
+		fmt.Printf("Found metadata file in %s, using this path directly\n", cmdArgs.Path)
+		return cmdArgs.Path, nil
+	}
+
+	// If path doesn't exist or is a directory without metadata, look for latest timestamp dir
+	stat, err := os.Stat(cmdArgs.Path)
+	if err == nil && stat.IsDir() {
+		// Path exists and is a directory
+		fmt.Printf("Looking for latest timestamp directory in: %s\n", cmdArgs.Path)
+		importPath, err := getLatestTimestampDir(cmdArgs.Path, cmdArgs.Database)
+		if err != nil {
+			return "", fmt.Errorf("failed to get latest timestamp directory: %v", err)
+		}
+		fmt.Printf("Found latest timestamp directory: %s\n", importPath)
+		return importPath, nil
+	}
+
+	// If path doesn't exist or is not a directory, assume it's a zip file
+	if strings.HasSuffix(cmdArgs.Path, ".zip") {
+		return cmdArgs.Path, nil
+	}
+
+	// Otherwise, try to find latest zip file in the directory
+	dir := filepath.Dir(cmdArgs.Path)
+	zipPath, err := getLatestZipFile(dir, cmdArgs.Database)
+	if err != nil {
+		return "", fmt.Errorf("failed to get latest zip file: %v", err)
+	}
+	return zipPath, nil
+}
+
 func newImportCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "import",
 		Short: "Import database data",
-		Long:  `Import database data from a file.`,
-		RunE: func(cmd *cobra.Command, cmdLineArgs []string) error { // Renamed original 'args' to 'cmdLineArgs'
-			// Load config from environment
-			cfg, err := config.LoadConfig()
+		Long:  `Import database data from files previously exported by syncdb.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmdArgs, _, conn, err := loadAndValidateArgs(cmd)
 			if err != nil {
-				return fmt.Errorf("failed to load config: %v", err)
+				return err // Error already formatted by loadAndValidateArgs
+			}
+			defer conn.Close() // Ensure connection is closed
+
+			if cmdArgs.Path == "" {
+				return fmt.Errorf("path is required")
 			}
 
-			// Get profile name from flag
-			profileName, _ := cmd.Flags().GetString("profile")
-
-			// Populate arguments from flags, config, and profile
-			cmdArgs, err := populateCommonArgsFromFlagsAndConfig(cmd, cfg.Import.CommonConfig, profileName) // Use 'cmdArgs'
+			importPath, err := getImportPath(cmdArgs)
 			if err != nil {
-				return err // Return error from profile loading/parsing
+				return err
 			}
 
-			// Get import-specific flags
-			truncate, _ := cmd.Flags().GetBool("truncate")
-			dropDatabase, _ := cmd.Flags().GetBool("drop-database")
-			filePath := getStringFlagWithConfigFallback(cmd, "file-path", cfg.Import.Filepath) // File path is not part of profile
-
-			// Initialize storage (Storage settings are not part of profile)
-			var store storage.Storage
-			switch cmdArgs.Storage { // Use cmdArgs
-			case "local":
-				store = storage.NewLocalStorage(cmdArgs.FolderPath) // Use cmdArgs.FolderPath
-			case "s3":
-				if cmdArgs.S3Bucket == "" { // Use cmdArgs
-					return fmt.Errorf("s3-bucket is required when storage is set to s3 (flag or SYNCDB_IMPORT_S3_BUCKET env)")
+			// If it's a zip file, extract it
+			if strings.HasSuffix(importPath, ".zip") {
+				importDir, err := os.MkdirTemp("", "syncdb_import_*")
+				if err != nil {
+					return fmt.Errorf("failed to create temporary directory: %v", err)
 				}
-				if cmdArgs.S3Region == "" { // Use cmdArgs
-					return fmt.Errorf("s3-region is required when storage is set to s3 (flag or SYNCDB_IMPORT_S3_REGION env)")
+				defer os.RemoveAll(importDir) // Clean up temp directory when done
+
+				fmt.Printf("Unzipping file to: %s\n", importDir)
+				if err := unzipFile(importPath, importDir); err != nil {
+					return err
 				}
-				store = storage.NewS3Storage(cmdArgs.S3Bucket, cmdArgs.S3Region) // Use cmdArgs.S3Bucket, cmdArgs.S3Region
-				if store == nil {
-					return fmt.Errorf("failed to initialize S3 storage. Please ensure AWS credentials are set in environment")
-				}
-			default:
-				return fmt.Errorf("unsupported storage type: %s", cmdArgs.Storage) // Use cmdArgs
-			}
 
-			// Validate required values (Database name should now be resolved considering profile)
-			if cmdArgs.Database == "" { // Use cmdArgs
-				return fmt.Errorf("database name is required (set via --database flag, SYNCDB_IMPORT_DATABASE env, or profile)")
-			}
-
-			// Check if folder path is provided (Folder path is not part of profile)
-			if cmdArgs.FolderPath != "" { // Use cmdArgs
-				var importDir string
-
-				if cmdArgs.Zip { // Use cmdArgs
-					// Create temporary directory for files
-					importDir, err = os.MkdirTemp("", "syncdb_import_*")
+				// Find the metadata file
+				var metadataDir string
+				err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
 					if err != nil {
-						return fmt.Errorf("failed to create temporary directory: %v", err)
+						return err
 					}
-					defer os.RemoveAll(importDir) // Clean up temp directory when done
-
-					if cmdArgs.Storage == "s3" { // Use cmdArgs
-						fmt.Printf("Searching for latest zip file in S3 with prefix: %s\n", cmdArgs.FolderPath) // Use cmdArgs
-						// Find and download latest zip from S3
-						files, err := store.ListObjects(cmdArgs.FolderPath) // Use cmdArgs
-						if err != nil {
-							return fmt.Errorf("failed to list objects in S3: %v", err)
-						}
-
-						// Find latest zip file
-						var latestZip string
-						for _, file := range files {
-							if strings.HasSuffix(file, ".zip") {
-								if latestZip == "" || file > latestZip {
-									latestZip = file
-								}
-							}
-						}
-
-						if latestZip == "" {
-							return fmt.Errorf("no zip files found in S3 bucket under path: %s", cmdArgs.FolderPath) // Use cmdArgs
-						}
-
-						fmt.Printf("Found latest zip file: %s\n", latestZip)
-						fmt.Printf("Downloading zip file from S3...\n")
-
-						// Download the zip file
-						zipData, err := store.Download(latestZip)
-						if err != nil {
-							return fmt.Errorf("failed to download zip from S3: %v", err)
-						}
-						fmt.Printf("Successfully downloaded %d bytes from S3\n", len(zipData))
-
-						// Save zip file locally
-						zipPath := filepath.Join(importDir, "backup.zip")
-						if err := os.WriteFile(zipPath, zipData, 0644); err != nil {
-							return fmt.Errorf("failed to save zip file: %v", err)
-						}
-						fmt.Printf("Saved zip file to: %s\n", zipPath)
-
-						fmt.Printf("Unzipping file to: %s\n", importDir)
-						// Unzip the file
-						if err := unzipFile(zipPath, importDir); err != nil {
-							return err
-						}
-
-						fmt.Println("Looking for metadata file...")
-						// Find the timestamp directory by looking for the metadata file
-						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
-							if err != nil {
-								return err
-							}
-							if !info.IsDir() && strings.HasSuffix(path, "0_metadata.json") {
-								// Get parent directory of metadata file
-								importDir = filepath.Dir(path)
-								return filepath.SkipAll
-							}
-							return nil
-						})
-						if err != nil {
-							return fmt.Errorf("failed to find metadata file: %v", err)
-						}
-
-						if importDir == "" {
-							return fmt.Errorf("no metadata file found in zip file")
-						}
-
-						fmt.Printf("Using directory with metadata: %s\n", importDir)
-
-						// List all files after unzip
-						fmt.Println("\nFiles available in import directory:")
-						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
-							if err != nil {
-								return err
-							}
-							if !info.IsDir() {
-								relPath, err := filepath.Rel(importDir, path)
-								if err != nil {
-									return err
-								}
-								fmt.Printf("  - %s (%d bytes)\n", relPath, info.Size())
-							}
-							return nil
-						})
-						if err != nil {
-							fmt.Printf("Warning: failed to list unzipped files: %v\n", err)
-						}
-						fmt.Println()
-					} else { // Local storage
-						// Find latest zip file locally
-						zipFile, err := getLatestZipFile(cmdArgs.FolderPath, cmdArgs.Database) // Use cmdArgs
-						if err != nil {
-							return err
-						}
-
-						// Unzip the file
-						if err := unzipFile(zipFile, importDir); err != nil {
-							return err
-						}
-
-						fmt.Println("Looking for metadata file...")
-						// Find the timestamp directory by looking for the metadata file
-						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
-							if err != nil {
-								return err
-							}
-							if !info.IsDir() && strings.HasSuffix(path, "0_metadata.json") {
-								// Get parent directory of metadata file
-								importDir = filepath.Dir(path)
-								return filepath.SkipAll
-							}
-							return nil
-						})
-						if err != nil {
-							return fmt.Errorf("failed to find metadata file: %v", err)
-						}
-
-						if importDir == "" {
-							return fmt.Errorf("no metadata file found in zip file")
-						}
-
-						fmt.Printf("Using directory with metadata: %s\n", importDir)
-
-						// List all files after unzip
-						fmt.Println("\nFiles available in import directory:")
-						err = filepath.Walk(importDir, func(path string, info os.FileInfo, err error) error {
-							if err != nil {
-								return err
-							}
-							if !info.IsDir() {
-								relPath, err := filepath.Rel(importDir, path)
-								if err != nil {
-									return err
-								}
-								fmt.Printf("  - %s (%d bytes)\n", relPath, info.Size())
-							}
-							return nil
-						})
-						if err != nil {
-							fmt.Printf("Warning: failed to list unzipped files: %v\n", err)
-						}
-						fmt.Println()
+					if !info.IsDir() && strings.HasSuffix(path, "0_metadata.json") {
+						metadataDir = filepath.Dir(path)
+						return filepath.SkipAll
 					}
-				} else { // Not using zip
-					if cmdArgs.Storage == "s3" { // Use cmdArgs
-						// Create temporary directory for files
-						importDir, err = os.MkdirTemp("", "syncdb_import_*")
-						if err != nil {
-							return fmt.Errorf("failed to create temporary directory: %v", err)
-						}
-						defer os.RemoveAll(importDir)
+					return nil
+				})
+				if err != nil {
+					return fmt.Errorf("failed to find metadata file: %v", err)
+				}
 
-						// List files in S3 to find latest timestamp directory
-						files, err := store.ListObjects(cmdArgs.FolderPath) // Use cmdArgs
-						if err != nil {
-							return fmt.Errorf("failed to list objects in S3: %v", err)
-						}
+				if metadataDir == "" {
+					return fmt.Errorf("no metadata file found in zip file")
+				}
 
-						// Find latest timestamp directory
-						var latestTimestamp string
-						for _, file := range files {
-							// Skip non-SQL and non-JSON files
-							if !strings.HasSuffix(file, ".sql") && !strings.HasSuffix(file, ".json") {
-								continue
-							}
+				importPath = metadataDir
+			}
 
-							// Extract timestamp from file path
-							parts := strings.Split(file, "/")
-							if len(parts) < 2 {
-								continue
-							}
-							timestamp := parts[len(parts)-2]
+			// At this point, importPath should point to a directory containing metadata.json
+			if !storage.IsExportPath(importPath) {
+				return fmt.Errorf("invalid import path: %s (no metadata file found)", importPath)
+			}
 
-							if latestTimestamp == "" || timestamp > latestTimestamp {
-								latestTimestamp = timestamp
-							}
-						}
+			// Read metadata file
+			metadataFile := filepath.Join(importPath, "0_metadata.json")
+			metadataBytes, err := os.ReadFile(metadataFile)
+			if err != nil {
+				return fmt.Errorf("failed to read metadata file: %v", err)
+			}
 
-						if latestTimestamp == "" {
-							return fmt.Errorf("no timestamp directories found in S3")
-						}
+			// Parse metadata
+			var metadata ExportData
+			if err := json.Unmarshal(metadataBytes, &metadata.Metadata); err != nil {
+				return fmt.Errorf("failed to parse metadata: %v", err)
+			}
 
-						// Download required files from S3
-						if cmdArgs.IncludeSchema { // Use cmdArgs
-							schemaData, err := store.Download(fmt.Sprintf("%s/0_schema.sql", latestTimestamp))
-							if err != nil {
-								return fmt.Errorf("failed to download schema from S3: %v", err)
-							}
-							if err := os.WriteFile(filepath.Join(importDir, "0_schema.sql"), schemaData, 0644); err != nil {
-								return fmt.Errorf("failed to save schema file: %v", err)
-							}
-						}
-
-						// Download metadata
-						metadataData, err := store.Download(fmt.Sprintf("%s/0_metadata.json", latestTimestamp))
-						if err != nil {
-							return fmt.Errorf("failed to download metadata from S3: %v", err)
-						}
-						if err := os.WriteFile(filepath.Join(importDir, "0_metadata.json"), metadataData, 0644); err != nil {
-							return fmt.Errorf("failed to save metadata file: %v", err)
-						}
-
-						// Read metadata to get table list
-						var metadata struct {
-							ExportedAt   time.Time `json:"exported_at"`
-							DatabaseName string    `json:"database_name"`
-							Tables       []string  `json:"tables"`
-							Schema       bool      `json:"include_schema"`
-							ViewData     bool      `json:"include_view_data"`
-							Base64       bool      `json:"base64"`
-						}
-						if err := json.Unmarshal(metadataData, &metadata); err != nil {
-							return fmt.Errorf("failed to parse metadata file: %v", err)
-						}
-
-						// Download each table file
-						for i, table := range metadata.Tables {
-							tableData, err := store.Download(fmt.Sprintf("%s/%d_%s.sql", latestTimestamp, i+1, table))
-							if err != nil {
-								return fmt.Errorf("failed to download table %s from S3: %v", table, err)
-							}
-							if err := os.WriteFile(filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", i+1, table)), tableData, 0644); err != nil {
-								return fmt.Errorf("failed to save table file: %v", err)
-							}
-						}
-					} else { // Local storage, not zip
-						// Get latest timestamp directory locally
-						absPath, err := filepath.Abs(cmdArgs.FolderPath)
-						if err != nil {
-							return fmt.Errorf("failed to get absolute path for '%s': %v", cmdArgs.FolderPath, err)
-						}
-						fmt.Printf("Looking for latest timestamp directory in: %s\n", absPath)
-						importDir, err = getLatestTimestampDir(absPath, cmdArgs.Database)
-						if err != nil {
-							return fmt.Errorf("failed to get latest timestamp directory: %v", err)
-						}
-						fmt.Printf("Found latest timestamp directory: %s\n", importDir)
-					}
-				} // Drop and recreate database if requested
-				if dropDatabase {
-					fmt.Printf("Dropping database %s...\n", cmdArgs.Database)
-					// Connect to server without database to drop/create
-					serverConn, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, "")
-					if err != nil {
-						return fmt.Errorf("failed to connect to server: %v", err)
-					}
-
-					// Use appropriate escaping based on driver
-					var dropSQL, createSQL string
-					if cmdArgs.Driver == "mysql" {
-						dropSQL = fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", cmdArgs.Database)
-						createSQL = fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", cmdArgs.Database)
-					} else {
-						// PostgreSQL uses double quotes for identifiers
-						dropSQL = fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, cmdArgs.Database)
-						createSQL = fmt.Sprintf(`CREATE DATABASE "%s" ENCODING = 'UTF8' LC_COLLATE = 'en_US.UTF-8' LC_CTYPE = 'en_US.UTF-8' TEMPLATE = template0`, cmdArgs.Database)
-					}
-
-					// Drop database if exists
-					fmt.Printf("Dropping database if exists...\n")
-					if _, err := serverConn.Exec(dropSQL); err != nil {
-						serverConn.Close()
+			// Import schema if included and requested
+			if metadata.Metadata.Schema && cmdArgs.IncludeSchema {
+				fmt.Println("Importing schema...")
+				if cmdArgs.Drop {
+					if err := db.DropDatabase(conn); err != nil {
 						return fmt.Errorf("failed to drop database: %v", err)
 					}
-
-					// Create database
-					fmt.Printf("Creating new database...\n")
-					if _, err := serverConn.Exec(createSQL); err != nil {
-						serverConn.Close()
+					if err := db.CreateDatabase(conn); err != nil {
 						return fmt.Errorf("failed to create database: %v", err)
 					}
-
-					serverConn.Close()
-					fmt.Printf("Database %s dropped and recreated successfully\n", cmdArgs.Database)
-
-					// Brief pause to allow database server to catch up
-					time.Sleep(1 * time.Second)
 				}
 
-				// Initialize database connection
-				fmt.Printf("Connecting to database %s...\n", cmdArgs.Database)
-				database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database)
+				schemaFile := filepath.Join(importPath, "0_schema.sql")
+				schemaData, err := os.ReadFile(schemaFile)
 				if err != nil {
-					return fmt.Errorf("failed to connect to database: %v", err)
-				}
-				defer database.Close()
-
-				// Create a Connection instance
-				conn := &db.Connection{
-					DB: database,
-					Config: db.ConnectionConfig{
-						Driver:   cmdArgs.Driver,
-						Host:     cmdArgs.Host,
-						Port:     cmdArgs.Port,
-						User:     cmdArgs.Username,
-						Password: cmdArgs.Password,
-						Database: cmdArgs.Database,
-					},
+					return fmt.Errorf("failed to read schema file: %v", err)
 				}
 
-				// Use tables from cmdArgs
-				currentTables := cmdArgs.Tables
-				if len(currentTables) == 0 {
-					currentTables, err = db.GetTables(conn)
-					if err != nil {
-						return fmt.Errorf("failed to get tables: %v", err)
-					}
+				if err := db.ExecuteSchema(conn, string(schemaData)); err != nil {
+					return fmt.Errorf("failed to execute schema: %v", err)
 				}
-
-				// Get table dependencies and sort tables
-				deps := make(map[string][]string)
-				for _, table := range currentTables {
-					deps[table], err = db.GetTableDependencies(conn, table)
-					if err != nil {
-						return fmt.Errorf("failed to get dependencies for table %s: %v", table, err)
-					}
-				}
-				sortedTables := db.SortTablesByDependencies(currentTables, deps)
-
-				// Create maps for faster lookup
-				allTables, err := db.GetTables(conn)
-				if err != nil {
-					return fmt.Errorf("failed to get all tables: %v", err)
-				}
-
-				expandedInclude := expandTablePatterns(allTables, cmdArgs.Tables)
-				excludeTableMap := expandTablePatterns(allTables, cmdArgs.ExcludeTable)
-				excludeSchemaMap := expandTablePatterns(allTables, cmdArgs.ExcludeTableSchema)
-				excludeDataMap := expandTablePatterns(allTables, cmdArgs.ExcludeTableData)
-				for t := range excludeTableMap {
-					excludeSchemaMap[t] = true
-					excludeDataMap[t] = true
-				}
-
-				// Read metadata to get list of tables to import
-				var metadata struct {
-					Tables []string `json:"tables"`
-				}
-				metadataFile := filepath.Join(importDir, "0_metadata.json")
-				fmt.Printf("Reading metadata file from: %s\n", metadataFile)
-				metadataBytes, err := os.ReadFile(metadataFile)
-				if err != nil {
-					return fmt.Errorf("failed to read metadata file: %v", err)
-				}
-				if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
-					return fmt.Errorf("failed to parse metadata file: %v", err)
-				}
-				fmt.Printf("Found %d tables in metadata\n", len(metadata.Tables))
-
-				importTables := []string{}
-				for _, t := range metadata.Tables {
-					if !excludeTableMap[t] && (len(expandedInclude) == 0 || expandedInclude[t]) {
-						importTables = append(importTables, t)
-					}
-				}
-				fmt.Printf("Will import %d tables\n", len(importTables))
-
-				// Import schema if requested
-				if cmdArgs.IncludeSchema {
-					// Read schema file directly
-					schemaFilePath := filepath.Join(importDir, "0_schema.sql")
-					schemaContent, err := os.ReadFile(schemaFilePath)
-					if err != nil {
-						return fmt.Errorf("failed to read schema file: %v", err)
-					}
-
-					fmt.Printf("Importing schema from file (%d bytes)...\n", len(schemaContent))
-					if err := importSchema(conn, schemaContent); err != nil {
-						return fmt.Errorf("failed to import schema: %v", err)
-					}
-				} else {
-					fmt.Println("Skipping schema import as --include-schema is set to false")
-				}
-
-				// Truncate tables if requested (regardless of whether schema import is enabled)
-				if truncate { // truncate is import-specific, read directly
-					for _, table := range sortedTables {
-						if excludeDataMap[table] {
-							continue
-						}
-
-						// Check if it's a view
-						isView, err := db.IsView(conn, table)
-						if err != nil {
-							// If table doesn't exist yet, it's not a view
-							if strings.Contains(err.Error(), "doesn't exist") {
-								continue // Skip tables that don't exist
-							} else {
-								return fmt.Errorf("failed to check if %s is a view: %v", table, err)
-							}
-						}
-
-						// Don't truncate views
-						if isView {
-							continue
-						}
-
-						if err := db.TruncateTable(conn, table); err != nil {
-							return fmt.Errorf("failed to truncate table %s: %v", table, err)
-						}
-
-						fmt.Printf("Truncated table '%s'\n", table)
-					}
-				}
-
-				// Import data if requested
-				fmt.Printf("\nChecking data import flags: IncludeData=%v, len(importTables)=%d\n", cmdArgs.IncludeData, len(importTables))
-				if cmdArgs.IncludeData { // Use cmdArgs
-					for _, table := range importTables {
-						if excludeDataMap[table] {
-							fmt.Printf("Skipping excluded table: %s\n", table)
-							continue
-						}
-
-						// Check if it's a view
-						isView, err := db.IsView(conn, table)
-						if err != nil {
-							// If table doesn't exist yet, it's not a view
-							if strings.Contains(err.Error(), "doesn't exist") {
-								isView = false
-							} else {
-								return fmt.Errorf("failed to check if %s is a view: %v", table, err)
-							}
-						}
-
-						if isView && !cmdArgs.IncludeViewData { // Use cmdArgs
-							fmt.Printf("Skipping view: %s (IncludeViewData=%v)\n", table, cmdArgs.IncludeViewData)
-							continue
-						}
-
-						fmt.Printf("\nImporting data for table %s...\n", table)
-
-						// Find the index of the table in metadata
-						tableIndex := -1
-						var metadata struct {
-							Tables []string `json:"tables"`
-						}
-
-						// Read metadata to find correct file number
-						metadataFile := filepath.Join(importDir, "0_metadata.json")
-						metadataBytes, err := os.ReadFile(metadataFile)
-						if err != nil {
-							return fmt.Errorf("failed to read metadata file: %v", err)
-						}
-						if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
-							return fmt.Errorf("failed to parse metadata file: %v", err)
-						}
-
-						// Find table's position in exported order
-						fmt.Printf("Looking for table '%s' in metadata.Tables list...\n", table)
-						for i, t := range metadata.Tables {
-							if t == table {
-								tableIndex = i + 1 // Use 1-based index as files are numbered from 1
-								fmt.Printf("Found table '%s' at index %d\n", table, tableIndex)
-								break
-							}
-						}
-
-						if tableIndex == -1 {
-							return fmt.Errorf("table %s not found in metadata", table)
-						}
-
-						// Read SQL file content with correct file number
-						sqlFile := filepath.Join(importDir, fmt.Sprintf("%d_%s.sql", tableIndex, table))
-						fmt.Printf("Attempting to read SQL file: %s\n", sqlFile)
-						sqlBytes, err := os.ReadFile(sqlFile)
-						if err != nil {
-							return fmt.Errorf("failed to read SQL file %s: %v", sqlFile, err)
-						}
-						fmt.Printf("Successfully read %d bytes from %s\n", len(sqlBytes), sqlFile)
-
-						// Get the base64 flag value from cmdArgs
-						useBase64 := cmdArgs.Base64
-
-						// Convert to string for processing
-						sqlContent := string(sqlBytes)
-
-						// Try to decode Base64 values in SQL if the base64 flag is enabled
-						if useBase64 {
-							sqlContent = decodeBase64Values(sqlContent)
-						}
-
-						// Get query separator
-						querySeparator := getStringFlagWithConfigFallback(cmd, "query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n")
-
-						// Split into individual SQL statements using the query separator
-						sqlStatements := strings.Split(sqlContent, querySeparator)
-
-						// Execute each statement separately
-						for _, stmt := range sqlStatements {
-							stmt = strings.TrimSpace(stmt)
-							if stmt == "" {
-								continue
-							}
-
-							// Add back the semicolon for proper MySQL execution
-							if !strings.HasSuffix(stmt, ";") {
-								stmt += ";"
-							}
-
-							_, err = conn.DB.Exec(stmt)
-							if err != nil {
-								return fmt.Errorf("failed to import data to table %s: %v", table, err)
-							}
-						}
-
-						fmt.Println("done!")
-					}
-				}
-
-				return nil
-			} else if filePath == "" { // Check import-specific filePath
-				return fmt.Errorf("either --file-path or --folder-path is required")
 			}
 
-			// --- Legacy File Path Import Logic ---
-			// This section handles the older --file-path mechanism.
-			// It might be worth considering deprecating this in favor of the folder-path approach.
-
-			fmt.Printf("Using legacy --file-path import: %s\n", filePath)
-
-			fileData, err := os.ReadFile(filePath)
-			if err != nil {
-				return fmt.Errorf("failed to read file: %v", err)
-			}
-
-			// Retrieve query separator before switch
-			querySeparator := getStringFlagWithConfigFallback(cmd, "query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n")
-
-			var importData ExportData // Assuming ExportData struct is still relevant here
-
-			switch cmdArgs.Format { // Use cmdArgs.Format
-			case "json":
-				if err := json.Unmarshal(fileData, &importData); err != nil {
-					return fmt.Errorf("failed to parse JSON import file: %v", err)
-				}
-			case "sql":
-				// Parse SQL file
-				// Use the custom query separator instead of \n\n
-				sqlStatements := strings.Split(string(fileData), querySeparator)
-				importData = ExportData{
-					Data: make(map[string][]map[string]interface{}),
-				}
-
-				for _, stmt := range sqlStatements {
-					stmt = strings.TrimSpace(stmt)
-					if stmt == "" || !strings.HasPrefix(strings.ToUpper(stmt), "INSERT") {
-						continue
-					}
-
-					// Extract table name and values
-					matches := sqlInsertRegex.FindStringSubmatch(stmt)
-					if len(matches) != 4 {
-						continue
-					}
-
-					tableName := matches[1]
-					columns := strings.Split(matches[2], ",")
-					for i := range columns {
-						columns[i] = strings.TrimSpace(columns[i])
-					}
-
-					// Parse values
-					values := strings.Split(matches[3], ",")
-					for i := range values {
-						values[i] = strings.TrimSpace(values[i])
-					}
-
-					// Create row data
-					rowData := make(map[string]interface{})
-					for i, col := range columns {
-						val := values[i]
-						if val == "NULL" {
-							rowData[col] = nil
-						} else if strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'") {
-							// String value - remove outer quotes
-							strVal := strings.Trim(val, "'")
-
-							// Try to parse as datetime first
-							if t, err := time.Parse("2006-01-02 15:04:05", strVal); err == nil {
-								rowData[col] = t
-								continue
-							}
-
-							// Check if this might be a JSON string
-							if strings.HasPrefix(strVal, "{") || strings.HasPrefix(strVal, "[") {
-								// Try to parse as JSON
-								var jsonVal interface{}
-								if err := json.Unmarshal([]byte(strVal), &jsonVal); err == nil {
-									rowData[col] = jsonVal
-								} else {
-									// If not valid JSON, use as regular string
-									rowData[col] = strVal
-								}
-							} else {
-								rowData[col] = strVal
-							}
-						} else {
-							// Try to parse as number first
-							if strings.Contains(val, ".") {
-								// Try as float
-								if f, err := strconv.ParseFloat(val, 64); err == nil {
-									rowData[col] = f
-									continue
-								}
-							} else {
-								// Try as integer
-								if i, err := strconv.ParseInt(val, 10, 64); err == nil {
-									rowData[col] = i
-									continue
-								}
-							}
-							// If not a number, use as is
-							rowData[col] = val
-						}
-					}
-
-					if importData.Data[tableName] == nil {
-						importData.Data[tableName] = make([]map[string]interface{}, 0)
-					}
-					importData.Data[tableName] = append(importData.Data[tableName], rowData)
-				}
-			default:
-				return fmt.Errorf("unsupported format: %s (supported formats: json, sql)", cmdArgs.Format) // Use cmdArgs
-			}
-
-			// Already handled database drop/recreate at the beginning of command
-
-			// Initialize database connection
-			database, err := db.InitDB(cmdArgs.Driver, cmdArgs.Host, cmdArgs.Port, cmdArgs.Username, cmdArgs.Password, cmdArgs.Database) // Use cmdArgs
-			if err != nil {
-				return fmt.Errorf("failed to connect to database: %v", err)
-			}
-			defer database.Close()
-
-			// Create a Connection instance
-			conn := &db.Connection{
-				DB: database,
-				Config: db.ConnectionConfig{
-					Driver:   cmdArgs.Driver,   // Use cmdArgs
-					Host:     cmdArgs.Host,     // Use cmdArgs
-					Port:     cmdArgs.Port,     // Use cmdArgs
-					User:     cmdArgs.Username, // Use cmdArgs
-					Password: cmdArgs.Password, // Use cmdArgs
-					Database: cmdArgs.Database, // Use cmdArgs
-				},
-			}
-
-			// Get base64 flag from cmdArgs and check if it's set in metadata (for JSON format)
-			useBase64 := cmdArgs.Base64                                               // Use cmdArgs
-			if cmdArgs.Format == "json" && importData.Metadata.Base64 && !useBase64 { // Use cmdArgs
-				fmt.Println("Metadata indicates base64 encoding was used during export. Enabling base64 decoding automatically.")
-				useBase64 = true
-			}
-
-			// Filter tables if specified
-			importTables := importData.Metadata.Tables // Use tables from the imported file's metadata
-			if len(cmdArgs.Tables) > 0 {               // Override with tables from command line/config if provided // Use cmdArgs
-				importTables = cmdArgs.Tables // Use cmdArgs
-			}
-
-			// Check if data should be imported based on metadata vs flag
-			if !importData.Metadata.IncludeData && cmdArgs.IncludeData { // Use cmdArgs
-				return fmt.Errorf("cannot import data: original export did not include data, but --include-data flag is true")
-			}
-
-			// Skip data import if include-data is false
-			if !cmdArgs.IncludeData { // Use cmdArgs
-				fmt.Println("Skipping data import as --include-data is set to false")
+			// Skip data import if not included in export or not requested
+			if !metadata.Metadata.IncludeData || !cmdArgs.IncludeData {
+				fmt.Println("Skipping data import as requested")
 				return nil
 			}
 
-			// Import data for each table
-			for _, table := range importTables {
-				// Get current row count
-				currentCount, err := db.GetTableRowCount(conn, table)
-				if err != nil {
-					return fmt.Errorf("failed to get row count for table %s: %v", table, err)
-				}
-				fmt.Printf("Table %s: %d rows before import\n", table, currentCount)
+			// Import data
+			fmt.Println("Importing data...")
 
-				// Truncate if requested (using import-specific flag)
-				if truncate {
-					if err := db.TruncateTable(conn, table); err != nil {
-						return fmt.Errorf("failed to truncate table %s: %v", table, err)
-					}
-				}
-
-				// Import data
-				data, ok := importData.Data[table]
-				if !ok {
-					return fmt.Errorf("table %s not found in import file", table)
-				}
-
-				// Check if we need to handle base64 decoding for string values in JSON data
-				if useBase64 && cmdArgs.Format == "json" { // Use cmdArgs
-					for i, row := range data {
-						for k, v := range row {
-							if strVal, ok := v.(string); ok {
-								// Try to decode base64 values
-								if isBase64(strVal) {
-									if decodedBytes, err := base64.StdEncoding.DecodeString(strVal); err == nil {
-										data[i][k] = string(decodedBytes)
-									}
-								}
-							}
-						}
-					}
-				}
-
-				// Create a buffer to store the data
-				var buf bytes.Buffer
-				encoder := json.NewEncoder(&buf)
-				for _, row := range data {
-					if err := encoder.Encode(row); err != nil {
-						return fmt.Errorf("failed to encode data row for table %s: %v", table, err)
-					}
-				}
-
-				if err := db.ImportTableData(conn, table, &buf, cmdArgs.DisableForeignKeyCheck); err != nil {
-					return fmt.Errorf("failed to import data to table %s: %v", table, err)
-				}
-
-				// Get final row count
-				finalCount, err := db.GetTableRowCount(conn, table)
-				if err != nil {
-					return fmt.Errorf("failed to get row count for table %s: %v", table, err)
-				}
-				fmt.Printf("Table %s: %d rows after import\n", table, finalCount)
+			// Get list of data files
+			entries, err := os.ReadDir(importPath)
+			if err != nil {
+				return fmt.Errorf("failed to read import directory: %v", err)
 			}
 
+			// Import each data file in order
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+					continue
+				}
+
+				if entry.Name() == "0_schema.sql" {
+					continue // Skip schema file
+				}
+
+				filePath := filepath.Join(importPath, entry.Name())
+				fmt.Printf("Importing %s...\n", entry.Name())
+
+				fileData, err := os.ReadFile(filePath)
+				if err != nil {
+					return fmt.Errorf("failed to read data file %s: %v", filePath, err)
+				}
+
+				if cmdArgs.Truncate {
+					tableName := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), "0123456789_"), ".sql")
+					if err := db.TruncateTable(conn, tableName); err != nil {
+						return fmt.Errorf("failed to truncate table %s: %v", tableName, err)
+					}
+				}
+
+				// Execute data statements
+				if err := db.ExecuteData(conn, string(fileData)); err != nil {
+					return fmt.Errorf("failed to execute data from %s: %v", entry.Name(), err)
+				}
+			}
+
+			fmt.Println("Import completed successfully")
 			return nil
 		},
 	}
@@ -971,12 +354,9 @@ func newImportCommand() *cobra.Command {
 
 	// Add import-specific flags
 	flags := cmd.Flags()
-	flags.String("s3-key", "", "S3 key (path to zip file)")
-	flags.Bool("truncate", false, "Truncate tables before importing")
-	flags.Bool("drop-database", false, "Drop and recreate database before importing")
-	flags.String("file-path", "", "File path to import from (alternative to folder-path)")
-	flags.Bool("disable-foreign-key-check", true, "Temporarily disable foreign key checks during import")
-	flags.String("query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n", "String used to separate SQL queries in import file (default: \\n--SYNCDB_QUERY_SEPARATOR--\\n)")
+	flags.Bool("truncate", false, "Truncate tables before import")
+	flags.Bool("drop", false, "Drop and recreate database before import")
+	flags.String("query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n", "String used to separate SQL queries in import file")
 
 	return cmd
 }

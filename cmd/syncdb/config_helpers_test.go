@@ -44,7 +44,7 @@ func setupTestCmd() *cobra.Command {
 	flags.StringP("database", "d", "", "Database name")
 	flags.StringP("driver", "D", "mysql", "Database driver (mysql, postgres)")
 	flags.StringSliceP("tables", "t", []string{}, "Tables to export (comma-separated)")
-	flags.StringP("folder-path", "o", "", "Folder path for export files or temporary import files")
+	flags.StringP("path", "o", "", "Path for export files (file/folder path)")
 	flags.StringP("storage", "s", "local", "Storage type (local, s3)")
 	flags.String("s3-bucket", "", "S3 bucket name")
 	flags.String("s3-region", "", "S3 region")
@@ -271,4 +271,82 @@ profile-include-schema: true # Profile says true
 		assert.Contains(t, err.Error(), "failed to load profile")
 	})
 
+}
+
+func addTestFlags(cmd *cobra.Command) {
+	flags := cmd.Flags()
+	flags.StringP("host", "H", "", "Database host")
+	flags.IntP("port", "P", 0, "Database port")
+	flags.StringP("username", "u", "", "Database username")
+	flags.StringP("password", "p", "", "Database password")
+	flags.StringP("database", "d", "", "Database name")
+	flags.StringP("driver", "D", "", "Database driver (mysql, postgres)")
+	flags.StringSliceP("tables", "t", []string{}, "Tables to export (comma-separated)")
+	flags.StringP("path", "o", "", "Path for export files (file/folder path)")
+	flags.StringP("storage", "s", "", "Storage type (local, s3)")
+	flags.String("s3-bucket", "", "S3 bucket name")
+	flags.String("s3-region", "", "S3 region")
+	flags.Bool("include-schema", false, "Include schema in operation")
+	flags.Bool("include-data", true, "Include table data in operation")
+	flags.Bool("include-view-data", false, "Include view data in operation")
+	flags.String("profile", "", "Name of the profile to use for settings")
+}
+
+func TestResolveCommonArgs(t *testing.T) {
+	// Set up temp profile directory
+	tmpDir, cleanup := setupTestProfileDir(t)
+	defer cleanup()
+	os.Setenv("SYNCDB_PATH", tmpDir)
+	defer os.Unsetenv("SYNCDB_PATH")
+
+	// Create a dummy config profile
+	createDummyCmdProfile(t, filepath.Join(tmpDir, "profiles"), "testprofile", `
+database: profiledb
+host: profilehost
+port: 5678
+username: profileuser
+password: profilepass
+driver: postgres
+tables: [table1, table2]
+includeschema: true
+includedata: true
+`)
+
+	// Create command and add test flags
+	cmd := &cobra.Command{}
+	addTestFlags(cmd)
+
+	// Create initial config
+	cfg := config.CommonConfig{
+		Driver: "mysql",
+		Host:   "confighost",
+		Port:   3306,
+	}
+
+	// Set some flag values
+	cmd.Flags().Set("host", "localhost")
+	cmd.Flags().Set("path", "./export")
+	cmd.Flags().Set("storage", "s3")
+	cmd.Flags().Set("s3-bucket", "mybucket")
+	cmd.Flags().Set("s3-region", "us-west-2")
+
+	// Loading config without profile
+	args, err := populateCommonArgsFromFlagsAndConfig(cmd, cfg, "")
+
+	// Verify values from flags override config values
+	require.NoError(t, err)
+	assert.Equal(t, "localhost", args.Host)
+	assert.Equal(t, "./export", args.Path)
+	assert.Equal(t, "s3", args.Storage)
+	assert.Equal(t, "mybucket", args.S3Bucket)
+	assert.Equal(t, "us-west-2", args.S3Region)
+
+	// Test with profile
+	args, err = populateCommonArgsFromFlagsAndConfig(cmd, cfg, "testprofile")
+	require.NoError(t, err)
+	// Flag values should still override profile values
+	assert.Equal(t, "localhost", args.Host)  // Flag value
+	assert.Equal(t, 5678, args.Port)         // Profile value
+	assert.Equal(t, "./export", args.Path)   // Flag value
+	assert.Equal(t, "postgres", args.Driver) // Profile value
 }

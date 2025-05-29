@@ -150,7 +150,7 @@ Use the `--profile <profile-name>` flag with `export` or `import` commands to lo
 
 ```bash
 # Export using 'dev-local' profile, storing locally
-syncdb export --profile dev-local --storage local --folder-path ./dev_backups
+syncdb export --profile dev-local --storage local --path ./dev_backups
 
 # Import using 'staging-pg' profile from S3, overriding the database name for this run
 syncdb import --profile staging-pg --storage s3 --s3-bucket staging-backups --database temp_staging_restore
@@ -179,29 +179,29 @@ syncdb export \
   --driver mysql \
   --storage local
 
-# Export to custom folder path
+# Export to custom path
 syncdb export \
   --database mydb \
-  --folder-path /path/to/exports
+  --path /path/to/exports
 
 # Export specific tables with schema
 syncdb export \
   --database mydb \
   --tables table1,table2 \
   --include-schema \
-  --folder-path ./backups
+  --path ./backups
 
 # Export without data
 syncdb export \
   --database mydb \
   --include-data=false \
-  --folder-path ./backups
+  --path ./backups
 
 # Export with condition
 syncdb export \
   --database mydb \
   --condition "created_at > '2024-01-01'" \
-  --folder-path ./backups
+  --path ./backups
 
 # Export to S3
 syncdb export \
@@ -219,7 +219,7 @@ syncdb export \
 
 The export command will create a folder structure like this:
 ```
-<folder-path>/
+<path>/
 └── <timestamp>/
       ├── 0_metadata.json
       ├── 0_schema.sql (if --include-schema is used)
@@ -319,7 +319,7 @@ Flags can be used to configure database connections, export/import behavior, and
 - `--include-schema`: Include database schema in export
 - `--include-data`: Include data in export (default: true)
 - `--condition`: WHERE condition for filtering data during export
-- `--folder-path`: Base folder path for export (default: database name)
+- `--path`: Path for export files (default: .)
 - `--format`: Output format (json, sql) (default: "sql")
 - `--exclude-table`: Exclude both schema and data for specified tables
 - `--exclude-table-schema`: Exclude schema for specified tables

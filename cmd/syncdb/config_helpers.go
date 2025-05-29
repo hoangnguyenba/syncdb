@@ -192,10 +192,10 @@ func populateCommonArgsFromFlagsAndConfig(cmd *cobra.Command, cfg config.CommonC
 	args.Tables = resolveStringSliceValue(cmd, "tables", cfg.Tables, profileTables)
 
 	// Path and Storage (Storage related flags are NOT part of profile)
-	args.FolderPath = resolveStringValue(cmd, "folder-path", cfg.FolderPath, "", "") // Not in profile
-	args.Storage = resolveStringValue(cmd, "storage", cfg.Storage, "", "local")      // Not in profile
-	args.S3Bucket = resolveStringValue(cmd, "s3-bucket", cfg.S3Bucket, "", "")       // Not in profile
-	args.S3Region = resolveStringValue(cmd, "s3-region", cfg.S3Region, "", "")       // Not in profile
+	args.Path = resolveStringValue(cmd, "path", "", "", "")                     // Not in profile
+	args.Storage = resolveStringValue(cmd, "storage", cfg.Storage, "", "local") // Not in profile
+	args.S3Bucket = resolveStringValue(cmd, "s3-bucket", cfg.S3Bucket, "", "")  // Not in profile
+	args.S3Region = resolveStringValue(cmd, "s3-region", cfg.S3Region, "", "")  // Not in profile
 
 	// Format/Encoding (Format is NOT part of profile)
 	args.Format = resolveStringValue(cmd, "format", cfg.Format, "", "sql") // Not in profile

@@ -22,7 +22,7 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 	flags.StringSliceP("tables", "t", []string{}, "Tables to export (comma-separated)")
 
 	// Path and Storage flags
-	flags.StringP("folder-path", "o", "", "Folder path for export files or temporary import files")
+	flags.StringP("path", "o", "", "Path for export files (file/folder path)")
 	flags.StringP("storage", "s", "", "Storage type (local, s3)")
 	flags.String("s3-bucket", "", "S3 bucket name")
 	flags.String("s3-region", "", "S3 region")
@@ -58,7 +58,7 @@ type CommonArgs struct {
 	Database               string
 	Driver                 string
 	Tables                 []string
-	FolderPath             string
+	Path                   string
 	Storage                string
 	S3Bucket               string
 	S3Region               string
@@ -75,6 +75,9 @@ type CommonArgs struct {
 	DisableForeignKeyCheck bool   // Temporarily disable foreign key checks during import
 	FileName               string // Name for export folder/zip (default: {database name}_yyyymmdd_hhmmss)
 	QuerySeparator         string // String used to separate SQL queries in export/import
+	// Import-specific fields
+	Truncate bool // Truncate tables before import
+	Drop     bool // Drop and recreate database before import
 }
 
 // addProfileConfigFlags adds flags to a command for all fields in ProfileConfig.

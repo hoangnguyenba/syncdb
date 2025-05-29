@@ -563,7 +563,7 @@ func uploadToS3(localPath string, isDirectory bool, cmdArgs *CommonArgs, timesta
 
 	if isDirectory {
 		// Upload individual files from the directory
-		fmt.Printf("Uploading individual files from %s to s3://%s/%s/%s/...\n", localPath, cmdArgs.S3Bucket, cmdArgs.FolderPath, timestamp)
+		fmt.Printf("Uploading individual files from %s to s3://%s/%s/%s/...\n", localPath, cmdArgs.S3Bucket, cmdArgs.Path, timestamp)
 
 		err := filepath.Walk(localPath, func(path string, info os.FileInfo, walkErr error) error {
 			if walkErr != nil {
@@ -585,7 +585,7 @@ func uploadToS3(localPath string, isDirectory bool, cmdArgs *CommonArgs, timesta
 			if err != nil {
 				return fmt.Errorf("failed to get relative path for %s: %v", path, err)
 			}
-			s3Key := filepath.Join(cmdArgs.FolderPath, timestamp, relPath) // Base folder + timestamp + relative file path
+			s3Key := filepath.Join(cmdArgs.Path, timestamp, relPath) // Base folder + timestamp + relative file path
 
 			// Read file data
 			fileData, err := io.ReadAll(file)
@@ -604,7 +604,7 @@ func uploadToS3(localPath string, isDirectory bool, cmdArgs *CommonArgs, timesta
 		if err != nil {
 			return fmt.Errorf("failed during S3 directory upload: %v", err)
 		}
-		fmt.Printf("Successfully uploaded all files from %s to S3 bucket: %s, path prefix: %s/%s\n", localPath, cmdArgs.S3Bucket, cmdArgs.FolderPath, timestamp)
+		fmt.Printf("Successfully uploaded all files from %s to S3 bucket: %s, path prefix: %s/%s\n", localPath, cmdArgs.S3Bucket, cmdArgs.Path, timestamp)
 
 	} else {
 		// Upload a single file (the zip archive)
@@ -614,8 +614,8 @@ func uploadToS3(localPath string, isDirectory bool, cmdArgs *CommonArgs, timesta
 			return fmt.Errorf("failed to read zip file %s for S3 upload: %v", zipFileName, err)
 		}
 
-		// S3 key: folderPath / zipfilename.zip
-		s3Key := filepath.Join(cmdArgs.FolderPath, filepath.Base(zipFileName))
+		// S3 key: Path / zipfilename.zip
+		s3Key := filepath.Join(cmdArgs.Path, filepath.Base(zipFileName))
 		fmt.Printf("Uploading %s to s3://%s/%s...\n", zipFileName, cmdArgs.S3Bucket, s3Key)
 
 		if err := s3Store.Upload(zipFileData, s3Key); err != nil {
@@ -654,59 +654,54 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 		return err // Error already formatted by getFinalTables
 	}
 
-	// Create timestamp for folder
-	timestamp := time.Now().Format("20060102_150405")
-	fileName := cmdArgs.FileName
-	if fileName == "" {
-		fileName = fmt.Sprintf("%s_%s", cmdArgs.Database, timestamp)
+	// If the provided path exists and contains metadata file, use it directly
+	exportPath := cmdArgs.Path
+	if storage.IsExportPath(exportPath) {
+		// Use the provided path as is since it already contains metadata
+		fmt.Printf("Using existing export path: %s\n", exportPath)
+	} else {
+		// Create timestamp for folder
+		timestamp := time.Now().Format("20060102_150405")
+		fileName := cmdArgs.FileName
+		if fileName == "" {
+			fileName = fmt.Sprintf("%s_%s", cmdArgs.Database, timestamp)
+		}
+		exportPath = filepath.Join(cmdArgs.Path, fileName)
 	}
 
-	exportPath := filepath.Join(cmdArgs.FolderPath, fileName) // Use fileName for export folder
-
-	// Create directory structure
+	// Create directory structure if needed
 	if err = os.MkdirAll(exportPath, 0755); err != nil {
-		return fmt.Errorf("failed to create directory structure: %v", err)
+		return fmt.Errorf("failed to create export directory %s: %v", exportPath, err)
 	}
 
-	fmt.Printf("Starting export of %d tables from database '%s' to %s\n", len(finalTables), cmdArgs.Database, exportPath)
-
-	// Write metadata file
+	// Write metadata first
 	if err = writeMetadata(exportPath, cmdArgs, finalTables); err != nil {
-		// Attempt cleanup before returning error
-		cleanupLocalFiles(exportPath)
-		return err
+		return err // Error already formatted by writeMetadata
 	}
 
-	// Export and write schema if requested
+	// Export schema if requested
 	if cmdArgs.IncludeSchema {
 		if err = writeSchema(conn, exportPath, cmdArgs, finalTables, excludeSchemaMap); err != nil {
-			// cleanupLocalFiles(exportPath)
-			return err
+			return err // Error already formatted by writeSchema
 		}
 	}
 
-	// Export and write data if requested
-	totalRecords := 0
+	// Export table data
 	if cmdArgs.IncludeData {
-		totalRecords, err = writeDataFiles(conn, exportPath, cmdArgs, finalTables, excludeDataMap, batchSize)
+		recordsExported, err := writeDataFiles(conn, exportPath, cmdArgs, finalTables, excludeDataMap, batchSize)
 		if err != nil {
-			cleanupLocalFiles(exportPath)
-			return err
+			return err // Error already formatted by writeDataFiles
 		}
-		fmt.Printf("Finished exporting data. Total records: %d\n", totalRecords)
-	} else {
-		fmt.Println("Skipping data export as per --include-data=false.")
+		fmt.Printf("Total records exported: %d\n", recordsExported)
 	}
 
-	// --- Post-export processing (Zip, S3 Upload, Cleanup) ---
-	zipFileName := "" // Store zip file name if created
-
-	// Handle Zipping
+	// Create zip file if requested
+	var zipFileName string
 	if cmdArgs.Zip {
-		zipFileName = filepath.Join(cmdArgs.FolderPath, fileName+".zip")
+		zipFileName = exportPath + ".zip"
+		fmt.Printf("Creating zip archive: %s\n", zipFileName)
 		if err = createZipArchive(exportPath, zipFileName); err != nil {
-			cleanupLocalFiles(exportPath, zipFileName) // Clean up dir and potentially partial zip
-			return err                                 // Error already formatted by createZipArchive
+			return fmt.Errorf("failed to create zip archive: %v", err)
 		}
 		// Zip successful, remove original directory *unless* S3 upload fails later
 		// We'll handle cleanup after potential S3 upload
@@ -721,30 +716,18 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 			isDirectory = false
 		}
 
-		if err = uploadToS3(uploadPath, isDirectory, cmdArgs, fileName); err != nil {
+		if err = uploadToS3(uploadPath, isDirectory, cmdArgs, filepath.Base(exportPath)); err != nil {
 			// S3 upload failed. Don't clean up local files automatically.
 			// User might want to retry or keep the local copy.
 			fmt.Printf("S3 Upload failed: %v\n", err)
 			fmt.Println("Local files/zip kept due to S3 upload failure.")
-			// Return the S3 error, but maybe wrap it?
-			return fmt.Errorf("S3 upload failed: %w", err)
+			return err
 		}
 
-		// S3 Upload successful, clean up local files
+		// Clean up local files after successful S3 upload (unless --keep-local was specified)
+		cleanupLocalFiles(exportPath)
 		if cmdArgs.Zip {
-			cleanupLocalFiles(exportPath, zipFileName) // Clean up original dir and the zip file
-		} else {
-			cleanupLocalFiles(exportPath) // Clean up the directory
-		}
-	} else {
-		// Local storage scenario
-		if cmdArgs.Zip {
-			// Zip created locally, clean up original directory
-			cleanupLocalFiles(exportPath)
-			fmt.Printf("Successfully exported %d tables (%d records) to %s\n", len(finalTables), totalRecords, zipFileName)
-		} else {
-			// No zip, no S3 - files are in exportPath
-			fmt.Printf("Successfully exported %d tables (%d records) to %s\n", len(finalTables), totalRecords, exportPath)
+			cleanupLocalFiles(zipFileName)
 		}
 	}
 
