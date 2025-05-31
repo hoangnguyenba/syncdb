@@ -46,6 +46,9 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 
 	// Profile flag
 	flags.String("profile", "", "Name of the profile to use for default settings")
+
+	flags.Int("from-table-index", 0, "Resume from a specific table index (for resuming interrupted import/export)")
+	flags.Int("from-chunk-index", 0, "Resume from a specific chunk within a table (for resuming interrupted import/export)")
 }
 
 // CommonArgs holds arguments derived from flags and config for command execution.
@@ -76,8 +79,10 @@ type CommonArgs struct {
 	FileName               string // Name for export folder/zip (default: {database name}_yyyymmdd_hhmmss)
 	QuerySeparator         string // String used to separate SQL queries in export/import
 	// Import-specific fields
-	Truncate bool // Truncate tables before import
-	Drop     bool // Drop and recreate database before import
+	Truncate       bool // Truncate tables before import
+	Drop           bool // Drop and recreate database before import
+	FromTableIndex int  // Resume from a specific table index
+	FromChunkIndex int  // Resume from a specific chunk within a table
 }
 
 // addProfileConfigFlags adds flags to a command for all fields in ProfileConfig.

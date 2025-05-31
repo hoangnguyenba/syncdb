@@ -111,6 +111,9 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 		},
 	}
 
+	cmdArgs.FromTableIndex, _ = cmd.Flags().GetInt("from-table-index")
+	cmdArgs.FromChunkIndex, _ = cmd.Flags().GetInt("from-chunk-index")
+
 	return &cmdArgs, batchSize, conn, nil // Return address of cmdArgs
 }
 
@@ -276,10 +279,9 @@ func writeSchema(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, fi
 
 // writeTableDataFile exports data for a single table, formats it as SQL INSERTs,
 // and writes it to a .sql file. Returns the number of records written.
-func writeTableDataFile(conn *db.Connection, exportPath string, table string, cmdArgs *CommonArgs, batchSize int, tableIndex int) (int, error) { // Changed commonArgs to CommonArgs
+func writeTableDataFileWithResume(conn *db.Connection, exportPath string, table string, cmdArgs *CommonArgs, batchSize int, tableIndex int, fromChunk int) (int, error) {
 	fmt.Printf("Exporting data for table '%s'...", table)
 
-	// Check if it's a view and if view data should be excluded
 	isView, err := db.IsView(conn, table)
 	if err != nil {
 		return 0, fmt.Errorf("failed to check if %s is a view: %v", table, err)
@@ -292,11 +294,6 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 	// Create a buffer to store the raw JSON data from db.ExportTableData
 	var buf bytes.Buffer
 	if err := db.ExportTableData(conn, table, &buf); err != nil {
-		// Check for "no rows in result set" specifically if needed, might not be a fatal error
-		// if strings.Contains(err.Error(), "no rows in result set") {
-		// 	fmt.Println(" done (0 records).")
-		// 	return 0, nil // Table is empty, not an error
-		// }
 		return 0, fmt.Errorf("failed to export raw data for table %s: %v", table, err)
 	}
 
@@ -374,11 +371,12 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 					case string:
 						if cmdArgs.Base64 {
 							encodedValue := base64.StdEncoding.EncodeToString([]byte(v))
-							values[j] = fmt.Sprintf("'%s'", encodedValue) // Assuming base64 strings are safe for SQL literals
+							values[j] = fmt.Sprintf("'%s'", encodedValue)
 						} else {
-							// escapedString := strings.ReplaceAll(v, "\\", "\\\\")            // Escape backslashes first
-							escapedString := strings.ReplaceAll(v, "'", "''") // Then escape single quotes
-							// escapedString = strings.ReplaceAll(escapedString, "\"", "\\\"") // Then escape double quotes
+							// Escape single quotes
+							escapedString := strings.ReplaceAll(v, "'", "''")
+							// Escape control characters (including tab, newline, etc.)
+							escapedString = escapeControlCharsForSQL(escapedString)
 							values[j] = fmt.Sprintf("'%s'", escapedString)
 						}
 					case time.Time:
@@ -448,19 +446,32 @@ func writeTableDataFile(conn *db.Connection, exportPath string, table string, cm
 
 // writeDataFiles iterates through tables and calls writeTableDataFile for each.
 // Returns the total number of records exported across all tables.
-func writeDataFiles(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, finalTables []string, excludeDataMap map[string]bool, batchSize int) (int, error) { // Changed commonArgs to CommonArgs
+func writeDataFiles(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, finalTables []string, excludeDataMap map[string]bool, batchSize int) (int, error) {
 	totalRecords := 0
 	fileIndex := 1 // Start numbering from 1
-	for _, table := range finalTables {
+	startTable := 0
+	if cmdArgs.FromTableIndex > 0 {
+		startTable = cmdArgs.FromTableIndex - 1 // 1-based to 0-based
+	}
+	for i, table := range finalTables {
+		if i < startTable {
+			fileIndex++ // maintain correct fileIndex
+			continue
+		}
 		if excludeDataMap[table] {
 			fmt.Printf("Skipping data export for table '%s' due to exclusion.\n", table)
+			fileIndex++
 			continue
 		}
 
+		fromChunk := 0
+		if i == startTable && cmdArgs.FromChunkIndex > 0 {
+			fromChunk = cmdArgs.FromChunkIndex
+		}
+
 		// Pass sequential file index for file naming
-		recordsWritten, err := writeTableDataFile(conn, exportPath, table, cmdArgs, batchSize, fileIndex)
+		recordsWritten, err := writeTableDataFileWithResume(conn, exportPath, table, cmdArgs, batchSize, fileIndex, fromChunk)
 		if err != nil {
-			// Decide if we should continue with other tables or stop on first error
 			return totalRecords, fmt.Errorf("error exporting data for table %s: %v", table, err) // Stop on error
 		}
 		totalRecords += recordsWritten
@@ -468,6 +479,147 @@ func writeDataFiles(conn *db.Connection, exportPath string, cmdArgs *CommonArgs,
 	}
 	return totalRecords, nil
 }
+
+// Helper for chunk resume
+// func writeTableDataFileWithResume(conn *db.Connection, exportPath string, table string, cmdArgs *CommonArgs, batchSize int, tableIndex int, fromChunk int) (int, error) {
+// 	// Copy of writeTableDataFile, but support resuming from a specific chunk
+// 	fmt.Printf("Exporting data for table '%s'...", table)
+
+// 	isView, err := db.IsView(conn, table)
+// 	if err != nil {
+// 		return 0, fmt.Errorf("failed to check if %s is a view: %v", table, err)
+// 	}
+// 	if isView && !cmdArgs.IncludeViewData {
+// 		fmt.Println(" skipping view.")
+// 		return 0, nil
+// 	}
+
+// 	// Create a buffer to store the raw JSON data from db.ExportTableData
+// 	var buf bytes.Buffer
+// 	if err := db.ExportTableData(conn, table, &buf); err != nil {
+// 		return 0, fmt.Errorf("failed to export raw data for table %s: %v", table, err)
+// 	}
+
+// 	// Decode the JSON data from the buffer
+// 	var operations []db.DataOperation
+// 	decoder := json.NewDecoder(&buf)
+// 	for {
+// 		var op db.DataOperation
+// 		if err := decoder.Decode(&op); err == io.EOF {
+// 			break
+// 		} else if err != nil {
+// 			// Handle potential empty buffer case gracefully
+// 			if buf.Len() == 0 {
+// 				break // No data was written to the buffer
+// 			}
+// 			return 0, fmt.Errorf("failed to decode operation for table %s: %v", table, err)
+// 		}
+// 		operations = append(operations, op)
+// 	}
+
+// 	// Convert operations to data map slice
+// 	data := make([]map[string]interface{}, len(operations))
+// 	for i, op := range operations {
+// 		data[i] = op.Data
+// 	}
+
+// 	recordCount := len(data)
+// 	if recordCount == 0 {
+// 		fmt.Println(" done (0 records).")
+// 		// Optionally write an empty file or skip writing? For now, skip.
+// 		return 0, nil
+// 	}
+
+// 	// --- Convert data to SQL format ---
+// 	// Get columns from database schema to ensure consistency and order
+// 	tableSchema, err := db.GetTableSchema(conn, table)
+// 	if err != nil {
+// 		return 0, fmt.Errorf("failed to get schema for table %s during data export: %v", table, err)
+// 	}
+// 	allColumns := tableSchema.Columns
+// 	backtickedColumns := make([]string, len(allColumns))
+// 	for i, col := range allColumns {
+// 		backtickedColumns[i] = fmt.Sprintf("`%s`", col)
+// 	}
+// 	columnList := strings.Join(backtickedColumns, ", ")
+// 	var batchStart int
+// 	if fromChunk > 0 {
+// 		batchStart = (fromChunk - 1) * batchSize
+// 	}
+// 	batchWritten := 0
+// 	for i := batchStart; i < recordCount; i += batchSize {
+// 		end := i + batchSize
+// 		if end > recordCount {
+// 			end = recordCount
+// 		}
+// 		batch := data[i:end]
+// 		if len(batch) == 0 {
+// 			continue
+// 		}
+// 		insertStmt := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES\n", table, columnList)
+// 		valueStrings := make([]string, 0, len(batch))
+// 		for _, row := range batch {
+// 			values := make([]string, len(allColumns))
+// 			for j, col := range allColumns {
+// 				val, exists := row[col]
+// 				if !exists || val == nil {
+// 					values[j] = "NULL"
+// 				} else {
+// 					switch v := val.(type) {
+// 					case string:
+// 						if cmdArgs.Base64 {
+// 							encodedValue := base64.StdEncoding.EncodeToString([]byte(v))
+// 							values[j] = fmt.Sprintf("'%s'", encodedValue)
+// 						} else {
+// 							escapedString := strings.ReplaceAll(v, "'", "''")
+// 							values[j] = fmt.Sprintf("'%s'", escapedString)
+// 						}
+// 					case time.Time:
+// 						if v.IsZero() {
+// 							values[j] = "NULL"
+// 						} else {
+// 							values[j] = fmt.Sprintf("'%s'", v.Format("2006-01-02 15:04:05"))
+// 						}
+// 					case []byte:
+// 						if cmdArgs.Base64 {
+// 							encodedValue := base64.StdEncoding.EncodeToString(v)
+// 							values[j] = fmt.Sprintf("'%s'", encodedValue)
+// 						} else {
+// 							return batchWritten, fmt.Errorf("binary data found in table %s column %s, use --base64 flag for export", table, col)
+// 						}
+// 					case bool:
+// 						if v {
+// 							values[j] = "1"
+// 						} else {
+// 							values[j] = "0"
+// 						}
+// 					default:
+// 						values[j] = fmt.Sprintf("%v", v)
+// 					}
+// 				}
+// 			}
+// 			valueStrings = append(valueStrings, fmt.Sprintf("(%s)", strings.Join(values, ", ")))
+// 		}
+// 		stmt := insertStmt + strings.Join(valueStrings, ",\n")
+// 		if !strings.HasSuffix(strings.TrimSpace(stmt), ";") {
+// 			stmt += ";"
+// 		}
+// 		// Write each chunk immediately to file (append mode)
+// 		dataFile := filepath.Join(exportPath, fmt.Sprintf("%d_%s.sql", tableIndex, table))
+// 		f, err := os.OpenFile(dataFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+// 		if err != nil {
+// 			return batchWritten, fmt.Errorf("failed to open data file for table %s (%s): %v", table, dataFile, err)
+// 		}
+// 		if _, err := f.WriteString(stmt + "\n"); err != nil {
+// 			f.Close()
+// 			return batchWritten, fmt.Errorf("failed to write data file for table %s (%s): %v", table, dataFile, err)
+// 		}
+// 		f.Close()
+// 		batchWritten += len(batch)
+// 	}
+// 	fmt.Printf(" done (%d records written to %s)\n", batchWritten, filepath.Join(exportPath, fmt.Sprintf("%d_%s.sql", tableIndex, table)))
+// 	return batchWritten, nil
+// }
 
 // createZipArchive creates a zip file containing the contents of the export directory.
 func createZipArchive(exportPath string, zipFileName string) error {
@@ -732,4 +884,28 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 	}
 
 	return nil
+}
+
+// escapeControlCharsForSQL escapes control characters in a string for SQL/JSON compatibility
+func escapeControlCharsForSQL(s string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\", // escape backslash first
+		"\t", "\\t",
+		"\n", "\\n",
+		"\r", "\\r",
+		"\b", "\\b",
+		"\f", "\\f",
+		"\v", "\\v",
+		"\x00", "\\0",
+	)
+	// Replace ASCII control chars 0x01-0x1F (except tab, newline, carriage return) with escaped unicode
+	var out strings.Builder
+	for _, r := range s {
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			out.WriteString(fmt.Sprintf("\\u%04x", r))
+		} else {
+			out.WriteRune(r)
+		}
+	}
+	return replacer.Replace(out.String())
 }

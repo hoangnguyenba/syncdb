@@ -314,11 +314,17 @@ func newImportCommand() *cobra.Command {
 			}
 
 			// Import each data file in order
-			for _, entry := range entries {
+			startTable := 0
+			if cmdArgs.FromTableIndex > 0 {
+				startTable = cmdArgs.FromTableIndex - 1 // 1-based to 0-based
+			}
+			for i, entry := range entries {
+				if i < startTable {
+					continue
+				}
 				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 					continue
 				}
-
 				if entry.Name() == "0_schema.sql" {
 					continue // Skip schema file
 				}
@@ -338,9 +344,34 @@ func newImportCommand() *cobra.Command {
 					}
 				}
 
-				// Execute data statements
-				if err := db.ExecuteData(conn, string(fileData)); err != nil {
-					return fmt.Errorf("failed to execute data from %s: %v", entry.Name(), err)
+				// Always split into chunks and import chunk by chunk
+				separator := "\n--SYNCDB_QUERY_SEPARATOR--\n"
+				if cmdArgs.QuerySeparator != "" {
+					separator = cmdArgs.QuerySeparator
+				}
+				chunks := strings.Split(string(fileData), separator)
+				startChunk := 0
+				if i == startTable && cmdArgs.FromChunkIndex > 0 {
+					startChunk = cmdArgs.FromChunkIndex - 1 // 1-based to 0-based
+				}
+				for chunkIdx, chunk := range chunks {
+					if chunkIdx < startChunk {
+						continue
+					}
+					if err := db.ExecuteData(conn, chunk); err != nil {
+						logFile := filepath.Join(".", "import-error.log")
+						errMsg := fmt.Sprintf("[ERROR] Failed to execute chunk %d from %s Error: %v\n", chunkIdx+1, entry.Name(), err)
+						fullLog := time.Now().Format(time.RFC3339) + "\n" + errMsg + "SQL:\n" + chunk + "\n\n"
+						f, ferr := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+						if ferr == nil {
+							f.WriteString(fullLog)
+							f.Close()
+						} else {
+							fmt.Printf("[ERROR] Could not write to import-error.log: %v\n", ferr)
+						}
+						fmt.Printf("[ERROR] Failed to execute chunk %d from %s: %v (see import-error.log)\n", chunkIdx+1, entry.Name(), err)
+						return fmt.Errorf("failed to execute chunk %d from %s: %v (see import-error.log)", chunkIdx+1, entry.Name(), err)
+					}
 				}
 			}
 

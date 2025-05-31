@@ -2,3 +2,4 @@ backup/*
 /syncdb
 /backup.json
 .env
+import-error.log

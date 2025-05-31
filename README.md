@@ -324,10 +324,14 @@ Flags can be used to configure database connections, export/import behavior, and
 - `--exclude-table`: Exclude both schema and data for specified tables
 - `--exclude-table-schema`: Exclude schema for specified tables
 - `--exclude-table-data`: Exclude data for specified tables
+- `--from-table-index`: Resume export from a specific table index (for resuming interrupted exports)
+- `--from-chunk-index`: Resume export from a specific chunk within a table (for resuming interrupted exports)
 
 ### Import Settings
 
 - `--upsert`: Perform upsert instead of insert (default: true)
+- `--from-table-index`: Resume import from a specific table index (for resuming interrupted imports)
+- `--from-chunk-index`: Resume import from a specific chunk within a table (for resuming interrupted imports)
 
 ### Storage Settings
 
