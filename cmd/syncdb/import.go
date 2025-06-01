@@ -2,13 +2,14 @@ package main
 
 import (
 	"archive/zip"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,8 +17,6 @@ import (
 	"github.com/hoangnguyenba/syncdb/pkg/storage"
 	"github.com/spf13/cobra"
 )
-
-var sqlInsertRegex = regexp.MustCompile(`INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\);`)
 
 func getLatestTimestampDir(basePath string, dbName string) (string, error) {
 	// Check if base directory exists
@@ -203,8 +202,11 @@ func getImportPath(cmdArgs *CommonArgs) (string, error) {
 func newImportCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "import",
-		Short: "Import database data",
-		Long:  `Import database data from files previously exported by syncdb.`,
+		Short: "Import database from files",
+		Long: `Import database schema and/or data from files.
+Examples:
+  syncdb import --path ./backup/mydb_20240101 --host localhost --database targetdb
+  syncdb import --path backup.zip --driver mysql --database targetdb --include-schema`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmdArgs, _, conn, err := loadAndValidateArgs(cmd)
 			if err != nil {
@@ -212,20 +214,18 @@ func newImportCommand() *cobra.Command {
 			}
 			defer conn.Close() // Ensure connection is closed
 
-			if cmdArgs.Path == "" {
-				return fmt.Errorf("path is required")
-			}
-
 			importPath, err := getImportPath(cmdArgs)
 			if err != nil {
 				return err
 			}
 
-			// If it's a zip file, extract it
+			// If path is a zip file, extract it to a temp directory
 			if strings.HasSuffix(importPath, ".zip") {
-				importDir, err := os.MkdirTemp("", "syncdb_import_*")
+				// Create temp directory for import
+				importDir := filepath.Join(os.TempDir(), "syncdb-import-"+time.Now().Format("20060102150405"))
+				err := os.MkdirAll(importDir, 0755)
 				if err != nil {
-					return fmt.Errorf("failed to create temporary directory: %v", err)
+					return err
 				}
 				defer os.RemoveAll(importDir) // Clean up temp directory when done
 
@@ -257,7 +257,6 @@ func newImportCommand() *cobra.Command {
 				importPath = metadataDir
 			}
 
-			// At this point, importPath should point to a directory containing metadata.json
 			if !storage.IsExportPath(importPath) {
 				return fmt.Errorf("invalid import path: %s (no metadata file found)", importPath)
 			}
@@ -274,6 +273,35 @@ func newImportCommand() *cobra.Command {
 			if err := json.Unmarshal(metadataBytes, &metadata.Metadata); err != nil {
 				return fmt.Errorf("failed to parse metadata: %v", err)
 			}
+
+			// Filter tables based on --tables parameter
+			var tablesToImport []string
+			if len(cmdArgs.Tables) > 0 {
+				availableTables := make(map[string]bool)
+				for _, table := range metadata.Metadata.Tables {
+					availableTables[table] = true
+				}
+
+				// Expand table patterns
+				for _, pattern := range cmdArgs.Tables {
+					pattern = strings.TrimSpace(pattern)
+					for table := range availableTables {
+						if db.TablePatternMatch(table, pattern) {
+							tablesToImport = append(tablesToImport, table)
+						}
+					}
+				}
+				// Sort the tables for consistent order
+				sort.Strings(tablesToImport)
+			} else {
+				tablesToImport = metadata.Metadata.Tables
+			}
+
+			if len(tablesToImport) == 0 {
+				return fmt.Errorf("no tables to import after applying table filter")
+			}
+
+			fmt.Printf("Tables to import: %v\n", tablesToImport)
 
 			// Import schema if included and requested
 			if metadata.Metadata.Schema && cmdArgs.IncludeSchema {
@@ -295,7 +323,12 @@ func newImportCommand() *cobra.Command {
 					return fmt.Errorf("failed to read schema file: %v", err)
 				}
 
-				if err := db.ExecuteSchema(conn, string(schemaData)); err != nil {
+				// Filter schema content to only include selected tables
+				if len(cmdArgs.Tables) > 0 {
+					schemaData = filterSchemaContent(schemaData, tablesToImport)
+				}
+
+				if err := importSchema(conn, schemaData); err != nil {
 					return fmt.Errorf("failed to execute schema: %v", err)
 				}
 			}
@@ -309,72 +342,147 @@ func newImportCommand() *cobra.Command {
 			// Import data
 			fmt.Println("Importing data...")
 
+			// Create a map of available tables from metadata
+			availableTables := make(map[string]bool)
+			for _, table := range metadata.Metadata.Tables {
+				availableTables[table] = true
+			}
+
 			// Get list of data files
 			entries, err := os.ReadDir(importPath)
 			if err != nil {
 				return fmt.Errorf("failed to read import directory: %v", err)
 			}
 
+			// Sort entries to ensure consistent order
+			fileList := make([]string, 0)
+			tableFileMap := make(map[string]string)
+			skippedFiles := make([]string, 0)
+
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+
+				fileName := entry.Name()
+				if fileName == "0_schema.sql" || fileName == "0_metadata.json" {
+					continue // Skip schema and metadata files
+				}
+
+				tableName := extractTableNameFromFile(fileName)
+				if !validateTableName(tableName, availableTables) {
+					skippedFiles = append(skippedFiles, fileName)
+					continue
+				}
+
+				// Check if this table should be imported based on user-specified tables
+				if len(tablesToImport) > 0 {
+					found := false
+					for _, t := range tablesToImport {
+						if t == tableName {
+							found = true
+							break
+						}
+					}
+					if !found {
+						skippedFiles = append(skippedFiles, fileName)
+						continue
+					}
+				}
+
+				fmt.Printf("Found data file for table '%s': %s\n", tableName, fileName)
+				tableFileMap[tableName] = fileName
+				fileList = append(fileList, fileName)
+			}
+
+			if len(skippedFiles) > 0 {
+				fmt.Printf("Skipped %d files:\n", len(skippedFiles))
+				for _, file := range skippedFiles {
+					fmt.Printf("  - %s\n", file)
+				}
+			}
+
+			if len(fileList) == 0 {
+				fmt.Println("No data files found to import")
+				return nil
+			}
+
+			sort.Strings(fileList)
+			fmt.Printf("Found %d data files to import\n", len(fileList))
+
 			// Import each data file in order
 			startTable := 0
 			if cmdArgs.FromTableIndex > 0 {
 				startTable = cmdArgs.FromTableIndex - 1 // 1-based to 0-based
 			}
-			for i, entry := range entries {
+
+			for i, fileName := range fileList {
 				if i < startTable {
 					continue
 				}
-				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-					continue
-				}
-				if entry.Name() == "0_schema.sql" {
-					continue // Skip schema file
-				}
 
-				filePath := filepath.Join(importPath, entry.Name())
-				fmt.Printf("Importing %s...\n", entry.Name())
+				filePath := filepath.Join(importPath, fileName)
+				fmt.Printf("Importing %s...\n", fileName)
 
 				fileData, err := os.ReadFile(filePath)
 				if err != nil {
 					return fmt.Errorf("failed to read data file %s: %v", filePath, err)
 				}
 
+				tableName := extractTableNameFromFile(fileName)
 				if cmdArgs.Truncate {
-					tableName := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), "0123456789_"), ".sql")
+					fmt.Printf("Truncating table '%s'...\n", tableName)
 					if err := db.TruncateTable(conn, tableName); err != nil {
 						return fmt.Errorf("failed to truncate table %s: %v", tableName, err)
 					}
 				}
 
-				// Always split into chunks and import chunk by chunk
+				// Split into chunks and import chunk by chunk
 				separator := "\n--SYNCDB_QUERY_SEPARATOR--\n"
 				if cmdArgs.QuerySeparator != "" {
 					separator = cmdArgs.QuerySeparator
 				}
 				chunks := strings.Split(string(fileData), separator)
+				fmt.Printf("Processing %s: Found %d chunks to import\n", fileName, len(chunks))
+
 				startChunk := 0
-				if i == startTable && cmdArgs.FromChunkIndex > 0 {
+				if cmdArgs.FromChunkIndex > 0 && i == startTable {
 					startChunk = cmdArgs.FromChunkIndex - 1 // 1-based to 0-based
 				}
+
+				processedRows := 0
 				for chunkIdx, chunk := range chunks {
 					if chunkIdx < startChunk {
 						continue
 					}
-					if err := db.ExecuteData(conn, chunk); err != nil {
-						logFile := filepath.Join(".", "import-error.log")
-						errMsg := fmt.Sprintf("[ERROR] Failed to execute chunk %d from %s Error: %v\n", chunkIdx+1, entry.Name(), err)
-						fullLog := time.Now().Format(time.RFC3339) + "\n" + errMsg + "SQL:\n" + chunk + "\n\n"
-						f, ferr := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-						if ferr == nil {
-							f.WriteString(fullLog)
-							f.Close()
-						} else {
-							fmt.Printf("[ERROR] Could not write to import-error.log: %v\n", ferr)
+
+					// Skip empty chunks
+					chunk = strings.TrimSpace(chunk)
+					if chunk == "" {
+						continue
+					}
+
+					fmt.Printf("  Importing chunk %d/%d for %s (%d bytes)...\n",
+						chunkIdx+1, len(chunks), tableName, len(chunk))
+
+					err = db.ExecuteData(conn, chunk)
+					if err != nil {
+						// Log the failing chunk to a file for debugging
+						logFile := fmt.Sprintf("%s_chunk_%d_error.sql", tableName, chunkIdx+1)
+						logErr := os.WriteFile(logFile, []byte(chunk), 0644)
+						if logErr != nil {
+							fmt.Printf("Warning: Failed to write error log: %v\n", logErr)
 						}
-						fmt.Printf("[ERROR] Failed to execute chunk %d from %s: %v (see import-error.log)\n", chunkIdx+1, entry.Name(), err)
-						return fmt.Errorf("failed to execute chunk %d from %s: %v (see import-error.log)", chunkIdx+1, entry.Name(), err)
+						return fmt.Errorf("failed to execute chunk %d in %s (chunk saved to %s): %v",
+							chunkIdx+1, fileName, logFile, err)
+					}
+					processedRows++
+
+					if processedRows%10 == 0 {
+						fmt.Printf("    Progress: %d/%d chunks processed\n", processedRows, len(chunks))
 					}
 				}
+				fmt.Printf("Completed importing %s: Processed %d chunks successfully\n", tableName, processedRows)
 			}
 
 			fmt.Println("Import completed successfully")
@@ -411,38 +519,6 @@ func extractTableNameFromSchema(stmt string) string {
 	}
 
 	return ""
-}
-
-// isBase64 checks if a string is Base64 encoded
-func isBase64(s string) bool {
-	_, err := base64.StdEncoding.DecodeString(s)
-	return err == nil && len(s) > 8 && strings.TrimRight(s, "=") != s[:len(s)-1]
-}
-
-// decodeBase64Values decodes Base64 encoded values in a SQL statement
-func decodeBase64Values(sql string) string {
-	// Define regex to match SQL values
-	valueRegex := regexp.MustCompile(`'([^']*)'`)
-
-	// Find all values and try to decode them if they're Base64 encoded
-	decoded := valueRegex.ReplaceAllStringFunc(sql, func(match string) string {
-		// Extract value without quotes
-		value := match[1 : len(match)-1]
-
-		// Check if it's Base64 encoded
-		if isBase64(value) {
-			decodedBytes, err := base64.StdEncoding.DecodeString(value)
-			if err == nil {
-				// Replace with decoded value
-				return "'" + string(decodedBytes) + "'"
-			}
-		}
-
-		// Return original value if not Base64 or decoding failed
-		return match
-	})
-
-	return decoded
 }
 
 func importSchema(conn *db.Connection, schemaContent []byte) error {
@@ -579,4 +655,85 @@ func importSchema(conn *db.Connection, schemaContent []byte) error {
 
 	fmt.Printf("Schema import completed successfully. Created %d tables.\n", len(executedTables))
 	return nil
+}
+
+// filterSchemaContent filters SQL schema content to only include selected tables
+// and their related objects (foreign keys, indexes, etc.)
+func filterSchemaContent(schemaData []byte, tables []string) []byte {
+	// Convert table list to a map for easier lookup
+	tableMap := make(map[string]bool)
+	for _, t := range tables {
+		tableMap[t] = true
+	}
+
+	// Split schema content into statements
+	stmts := strings.Split(string(schemaData), ";")
+	var filteredStmts []string
+
+	for _, stmt := range stmts {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+
+		// Get table name from statement
+		tableName := extractTableNameFromSchema(stmt)
+		if tableName == "" {
+			// If we can't determine table name, include the statement
+			// This handles USE, SET, and other non-table-specific statements
+			filteredStmts = append(filteredStmts, stmt)
+			continue
+		}
+
+		// Include statement if it's for a selected table
+		if tableMap[tableName] {
+			filteredStmts = append(filteredStmts, stmt)
+		}
+	}
+
+	// Rebuild schema content
+	return []byte(strings.Join(filteredStmts, ";\n") + ";")
+}
+
+// extractTableNameFromFile extracts the table name from a data file name,
+// handling numbered prefixes correctly (e.g., "79_postal_delivery_options.sql" -> "postal_delivery_options")
+func extractTableNameFromFile(fileName string) string {
+	// Skip files that don't have the .sql extension
+	if !strings.HasSuffix(fileName, ".sql") {
+		return ""
+	}
+
+	// Remove .sql extension
+	baseName := strings.TrimSuffix(fileName, ".sql")
+
+	// Split on underscore
+	parts := strings.SplitN(baseName, "_", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+
+	// Validate that the first part is a number
+	if _, err := strconv.Atoi(parts[0]); err != nil {
+		return ""
+	}
+
+	// Return everything after the first underscore
+	return parts[1]
+}
+
+// validateTableName checks if a table name is valid and exists in the provided list
+func validateTableName(tableName string, availableTables map[string]bool) bool {
+	if tableName == "" {
+		return false
+	}
+
+	// Check if it's in the available tables list
+	if len(availableTables) > 0 {
+		return availableTables[tableName]
+	}
+
+	// If no available tables list provided, perform basic validation
+	// Table names should not contain special characters except underscore
+	validTableName := regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	return validTableName.MatchString(tableName)
 }

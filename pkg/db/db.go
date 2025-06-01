@@ -450,15 +450,23 @@ func ExecuteData(conn *Connection, dataSQL string) error {
 	separator := "\n--SYNCDB_QUERY_SEPARATOR--\n"
 	statements := strings.Split(dataSQL, separator)
 
-	// First ensure foreign key checks are disabled for MySQL
+	// Configure MySQL settings for import
 	if conn.Config.Driver == DriverMySQL {
-		_, err := conn.DB.Exec("SET FOREIGN_KEY_CHECKS = 0")
-		if err != nil {
+		// Disable foreign key checks
+		if _, err := conn.DB.Exec("SET FOREIGN_KEY_CHECKS = 0"); err != nil {
 			return fmt.Errorf("failed to disable foreign key checks: %v", err)
 		}
+		// Allow zero datetime values
+		if _, err := conn.DB.Exec("SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_ZERO_IN_DATE,NO_ZERO_DATE', '')"); err != nil {
+			return fmt.Errorf("failed to configure sql_mode for zero dates: %v", err)
+		}
 		defer func() {
+			// Restore default settings
 			if _, err := conn.DB.Exec("SET FOREIGN_KEY_CHECKS = 1"); err != nil {
 				fmt.Printf("Warning: failed to re-enable foreign key checks: %v\n", err)
+			}
+			if _, err := conn.DB.Exec("SET SESSION sql_mode = @@GLOBAL.sql_mode"); err != nil {
+				fmt.Printf("Warning: failed to restore sql_mode: %v\n", err)
 			}
 		}()
 	}
