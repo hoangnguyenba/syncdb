@@ -409,8 +409,8 @@ func CreateDatabase(conn *Connection) error {
 
 // ExecuteSchema executes a schema definition SQL script
 func ExecuteSchema(conn *Connection, schemaSQL string) error {
-	// Split by semicolons to handle multiple statements
-	statements := strings.Split(schemaSQL, ";")
+	// Split by double newlines to handle multiple statements
+	statements := strings.Split(strings.TrimSpace(schemaSQL), "\n\n")
 
 	// Start a transaction for schema changes
 	tx, err := conn.DB.Begin()

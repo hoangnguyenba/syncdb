@@ -260,7 +260,7 @@ func writeSchema(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, fi
 				schemaOutput = append(schemaOutput, fmt.Sprintf("-- Table structure for %s\n%s\n", table, definition))
 			}
 		}
-		schemaData = []byte(strings.Join(schemaOutput, "\n"))
+		schemaData = []byte(strings.Join(schemaOutput, "\n\n"))
 	} else { // Default to JSON
 		schemaFileName = "0_schema.json"
 		schemaData, err = json.MarshalIndent(schemaDefinitions, "", "  ")
