@@ -14,6 +14,7 @@ import (
 	"github.com/hoangnguyenba/syncdb/pkg/db"
 
 	"github.com/hoangnguyenba/syncdb/pkg/config"
+	"github.com/hoangnguyenba/syncdb/pkg/profile"
 	"github.com/hoangnguyenba/syncdb/pkg/storage"
 	"github.com/spf13/cobra"
 )
@@ -99,6 +100,13 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 		}
 	case "gdrive":
 		creds, _ := cmd.Flags().GetString("gdrive-credentials")
+		if creds == "" {
+			syncDBDir, err := profile.GetSyncDBDir("")
+			if err != nil {
+				return nil, 0, nil, fmt.Errorf("failed to get syncdb directory: %w", err)
+			}
+			creds = filepath.Join(syncDBDir, "google-creds.json")
+		}
 		folder, _ := cmd.Flags().GetString("gdrive-folder")
 		if creds == "" {
 			return nil, 0, nil, fmt.Errorf("gdrive-credentials is required when storage is set to gdrive")
