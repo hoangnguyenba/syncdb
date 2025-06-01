@@ -59,14 +59,6 @@ func newExportCommand() *cobra.Command {
 	flags := cmd.Flags()
 	flags.Int("batch-size", 500, "Number of records to process in a batch")
 	flags.Int("limit", 0, "Maximum number of records to export per table (0 means no limit)")
-	// Use SyncDBPath from config for default gdrive-credentials path
-	var defaultGdriveCreds string
-	if exportConfig != nil && exportConfig.Export.Path != "" {
-		defaultGdriveCreds = filepath.Join(exportConfig.Export.Path, "google-creds.json")
-	}
-	flags.String("gdrive-credentials", defaultGdriveCreds, "Path to Google Drive service account credentials file")
-	flags.String("file-name", "", "Name for export folder/zip (default: {database name}_yyyymmdd_hhmmss)")
-	flags.String("query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n", "String used to separate SQL queries in export file (default: \\n--SYNCDB_QUERY_SEPARATOR--\\n)")
 
 	return cmd
 }
