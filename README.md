@@ -346,6 +346,84 @@ Flags can be used to configure database connections, export/import behavior, and
 #### Google Drive Storage
 - `--storage gdrive`: Use Google Drive
 - `--gdrive-folder`: Google Drive folder ID
+- `--gdrive-credentials`: Path to service account credentials file
+
+### Setting up Google Drive Storage
+
+1. **Create a Google Cloud Project:**
+   - Visit [Google Cloud Console](https://console.cloud.google.com)
+   - Create a new project or select an existing one
+   - Note your Project ID for later use
+
+2. **Enable Google Drive API:**
+   - Go to "APIs & Services > Library"
+   - Search for "Google Drive API"
+   - Click "Enable"
+
+3. **Create Service Account:**
+   - Go to "APIs & Services > Credentials"
+   - Click "Create Credentials" > "Service Account"
+   - Fill in the service account details:
+     - Name: e.g., "syncdb-service"
+     - Description: e.g., "Service account for SyncDB"
+   - Click "Create"
+   - Select a role (Project > Editor is recommended)
+   - Click "Continue" and then "Done"
+
+4. **Generate Service Account Key:**
+   - Find your service account in the credentials list
+   - Click the email address to view details
+   - Go to the "Keys" tab
+   - Click "Add Key" > "Create new key"
+   - Choose "JSON" format
+   - Click "Create" to download the credentials file
+
+5. **Setup Google Drive Folder:**
+   - Create a folder in Google Drive where exports will be stored
+   - Right-click the folder and select "Share"
+   - Add the service account email (found in the credentials JSON file) with "Editor" access
+   - Get the folder ID from the URL:
+     ```
+     https://drive.google.com/drive/folders/FOLDER_ID_HERE
+     ```
+
+### Using Google Drive Storage
+
+Export to Google Drive:
+```bash
+# Export database to Google Drive
+syncdb export \
+  --host localhost \
+  --port 3306 \
+  --username myuser \
+  --password mypass \
+  --database mydb \
+  --storage gdrive \
+  --gdrive-credentials /path/to/credentials.json \
+  --gdrive-folder your_folder_id
+
+# Export with schema and specific tables
+syncdb export \
+  --database mydb \
+  --storage gdrive \
+  --gdrive-credentials /path/to/credentials.json \
+  --gdrive-folder your_folder_id \
+  --include-schema \
+  --tables users,products
+
+# Import from Google Drive
+syncdb import \
+  --database mydb \
+  --storage gdrive \
+  --gdrive-credentials /path/to/credentials.json \
+  --gdrive-folder your_folder_id
+```
+
+You can also set Google Drive credentials via environment variables:
+```bash
+export SYNCDB_GDRIVE_CREDENTIALS=/path/to/credentials.json
+export SYNCDB_GDRIVE_FOLDER=your_folder_id
+```
 
 ### Environment Variables
 

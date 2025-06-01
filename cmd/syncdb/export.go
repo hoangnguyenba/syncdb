@@ -80,14 +80,27 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 	if cmdArgs.Database == "" {
 		return nil, 0, nil, fmt.Errorf("database name is required (set via --database flag, SYNCDB_EXPORT_DATABASE env, or profile)")
 	}
-	// Validate S3 args if storage=s3 (Storage is not part of profile)
-	if cmdArgs.Storage == "s3" {
+
+	// Validate storage-specific arguments
+	switch cmdArgs.Storage {
+	case "s3":
 		if cmdArgs.S3Bucket == "" {
 			return nil, 0, nil, fmt.Errorf("s3-bucket is required when storage is set to s3")
 		}
 		if cmdArgs.S3Region == "" {
 			return nil, 0, nil, fmt.Errorf("s3-region is required when storage is set to s3")
 		}
+	case "gdrive":
+		creds, _ := cmd.Flags().GetString("gdrive-credentials")
+		folder, _ := cmd.Flags().GetString("gdrive-folder")
+		if creds == "" {
+			return nil, 0, nil, fmt.Errorf("gdrive-credentials is required when storage is set to gdrive")
+		}
+		if folder == "" {
+			return nil, 0, nil, fmt.Errorf("gdrive-folder is required when storage is set to gdrive")
+		}
+		cmdArgs.GdriveCredentials = creds
+		cmdArgs.GdriveFolder = folder
 	}
 
 	// Initialize database connection
@@ -779,6 +792,117 @@ func uploadToS3(localPath string, isDirectory bool, cmdArgs *CommonArgs, timesta
 	return nil
 }
 
+// uploadToGDrive uploads either a single file (zip) or the contents of a directory to Google Drive.
+func uploadToGDrive(localPath string, isDirectory bool, cmdArgs *CommonArgs, timestamp string) error {
+	// Initialize Google Drive storage
+	gdriveStore, err := storage.NewGoogleDriveStorage(cmdArgs.GdriveCredentials, cmdArgs.GdriveFolder)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Google Drive storage: %v", err)
+	}
+
+	if isDirectory {
+		// Upload individual files from the directory
+		fmt.Printf("\n=== Starting directory upload to Google Drive ===\n")
+		fmt.Printf("Source directory: %s\n", localPath)
+		fmt.Printf("Google Drive folder ID: %s\n", cmdArgs.GdriveFolder)
+		fmt.Printf("Using credentials from: %s\n", cmdArgs.GdriveCredentials)
+
+		var totalFiles int
+		err := filepath.Walk(localPath, func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if !info.IsDir() {
+				totalFiles++
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to count files for upload: %v", err)
+		}
+
+		fmt.Printf("Found %d files to upload\n\n", totalFiles)
+		uploaded := 0
+
+		err = filepath.Walk(localPath, func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if info.IsDir() {
+				return nil // Skip directories
+			}
+
+			// Open file
+			file, err := os.Open(path)
+			if err != nil {
+				return fmt.Errorf("failed to open file %s for Google Drive upload: %v", path, err)
+			}
+			defer file.Close()
+
+			// Read file data
+			fileData, err := io.ReadAll(file)
+			if err != nil {
+				return fmt.Errorf("failed to read file %s for Google Drive upload: %v", path, err)
+			}
+
+			// Create filename: timestamp_directory/filename
+			relPath, err := filepath.Rel(localPath, path) // Path relative to the timestamp dir
+			if err != nil {
+				return fmt.Errorf("failed to get relative path for %s: %v", path, err)
+			}
+
+			fileName := filepath.Join(timestamp, relPath)
+			fmt.Printf("Uploading %s to Google Drive...\n", fileName)
+
+			// Upload to Google Drive
+			if err := gdriveStore.Upload(fileData, fileName); err != nil {
+				return fmt.Errorf("failed to upload file %s to Google Drive: %v", fileName, err)
+			}
+			uploaded++
+			fmt.Printf("Progress: [%d/%d] files uploaded\n", uploaded, totalFiles)
+			return nil
+		})
+
+		if err != nil {
+			return fmt.Errorf("failed during Google Drive directory upload: %v", err)
+		}
+		fmt.Printf("\n=== Directory upload completed successfully ===\n")
+		fmt.Printf("Total files uploaded: %d\n", totalFiles)
+		fmt.Printf("Source directory: %s\n", localPath)
+		fmt.Printf("Google Drive folder ID: %s\n", cmdArgs.GdriveFolder)
+
+	} else {
+		// Upload a single file (the zip archive)
+		zipFileName := localPath
+		fmt.Printf("\n=== Starting zip file upload to Google Drive ===\n")
+		fmt.Printf("Source file: %s\n", zipFileName)
+		fmt.Printf("Google Drive folder ID: %s\n", cmdArgs.GdriveFolder)
+		fmt.Printf("Using credentials from: %s\n", cmdArgs.GdriveCredentials)
+
+		fileInfo, err := os.Stat(zipFileName)
+		if err != nil {
+			return fmt.Errorf("failed to get file info for %s: %v", zipFileName, err)
+		}
+		fmt.Printf("File size: %.2f MB\n\n", float64(fileInfo.Size())/(1024*1024))
+
+		zipFileData, err := os.ReadFile(zipFileName)
+		if err != nil {
+			return fmt.Errorf("failed to read zip file %s for Google Drive upload: %v", zipFileName, err)
+		}
+
+		// Use the base name of the zip file as the target name
+		fileName := filepath.Base(zipFileName)
+		fmt.Printf("Starting upload of %s...\n", fileName)
+
+		if err := gdriveStore.Upload(zipFileData, fileName); err != nil {
+			return fmt.Errorf("failed to upload zip file %s to Google Drive: %v", fileName, err)
+		}
+		fmt.Printf("\n=== Upload completed successfully ===\n")
+	}
+
+	return nil
+}
+
 // cleanupLocalFiles removes the specified local files or directories, logging warnings on failure.
 func cleanupLocalFiles(paths ...string) {
 	for _, path := range paths {
@@ -859,8 +983,9 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 		// We'll handle cleanup after potential S3 upload
 	}
 
-	// Handle S3 Upload
-	if cmdArgs.Storage == "s3" {
+	// Handle uploads to remote storage
+	switch cmdArgs.Storage {
+	case "s3":
 		uploadPath := exportPath // Default to uploading the directory
 		isDirectory := true
 		if cmdArgs.Zip {
@@ -877,6 +1002,27 @@ func runExport(cmd *cobra.Command, cmdLineArgs []string) error {
 		}
 
 		// Clean up local files after successful S3 upload (unless --keep-local was specified)
+		cleanupLocalFiles(exportPath)
+		if cmdArgs.Zip {
+			cleanupLocalFiles(zipFileName)
+		}
+
+	case "gdrive":
+		uploadPath := exportPath // Default to uploading the directory
+		isDirectory := true
+		if cmdArgs.Zip {
+			uploadPath = zipFileName // Upload the zip file instead
+			isDirectory = false
+		}
+
+		if err = uploadToGDrive(uploadPath, isDirectory, cmdArgs, filepath.Base(exportPath)); err != nil {
+			// Google Drive upload failed. Don't clean up local files automatically.
+			fmt.Printf("Google Drive Upload failed: %v\n", err)
+			fmt.Println("Local files/zip kept due to Google Drive upload failure.")
+			return err
+		}
+
+		// Clean up local files after successful upload (unless --keep-local was specified)
 		cleanupLocalFiles(exportPath)
 		if cmdArgs.Zip {
 			cleanupLocalFiles(zipFileName)

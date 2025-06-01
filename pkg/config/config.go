@@ -24,6 +24,8 @@ type CommonConfig struct {
 	Storage            string
 	S3Bucket           string
 	S3Region           string
+	GdriveCredentials  string // Path to Google Drive service account credentials file
+	GdriveFolder       string // Google Drive folder ID for storing files
 }
 
 // Config holds the overall application configuration
@@ -52,6 +54,8 @@ func loadCommonConfig(prefix string) CommonConfig {
 	cfg.S3Bucket = getViperString(prefix+"s3_bucket", "")
 	cfg.S3Region = getViperString(prefix+"s3_region", "")
 	cfg.Storage = getViperString(prefix+"storage", "local")
+	cfg.GdriveCredentials = getViperString(prefix+"gdrive_credentials", "")
+	cfg.GdriveFolder = getViperString(prefix+"gdrive_folder", "")
 
 	// Handle tables
 	if tables := getViperString(prefix+"tables", ""); tables != "" {

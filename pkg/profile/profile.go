@@ -25,6 +25,8 @@ type ProfileConfig struct {
 	IncludeData        *bool    `yaml:"include_data,omitempty"`   // Pointer to distinguish between false and not set
 	Condition          string   `yaml:"condition,omitempty"`
 	ExcludeTable       []string `yaml:"exclude_table,omitempty"`
+	GdriveCredentials  string   `yaml:"gdrive_credentials,omitempty"`
+	GdriveFolder       string   `yaml:"gdrive_folder,omitempty"`
 	ExcludeTableSchema []string `yaml:"exclude_table_schema,omitempty"`
 	ExcludeTableData   []string `yaml:"exclude_table_data,omitempty"`
 }

@@ -176,6 +176,13 @@ func populateCommonArgsFromFlagsAndConfig(cmd *cobra.Command, cfg config.CommonC
 		profileIncludeSchema = loadedProfile.IncludeSchema
 		profileIncludeData = loadedProfile.IncludeData
 		profileExcludeTable = loadedProfile.ExcludeTable
+		// Set Google Drive credentials from profile if available
+		if loadedProfile.GdriveCredentials != "" {
+			cfg.GdriveCredentials = loadedProfile.GdriveCredentials
+		}
+		if loadedProfile.GdriveFolder != "" {
+			cfg.GdriveFolder = loadedProfile.GdriveFolder
+		}
 		profileExcludeTableSchema = loadedProfile.ExcludeTableSchema
 		profileExcludeTableData = loadedProfile.ExcludeTableData
 	}
@@ -192,10 +199,12 @@ func populateCommonArgsFromFlagsAndConfig(cmd *cobra.Command, cfg config.CommonC
 	args.Tables = resolveStringSliceValue(cmd, "tables", cfg.Tables, profileTables)
 
 	// Path and Storage (Storage related flags are NOT part of profile)
-	args.Path = resolveStringValue(cmd, "path", "", "", "")                     // Not in profile
-	args.Storage = resolveStringValue(cmd, "storage", cfg.Storage, "", "local") // Not in profile
-	args.S3Bucket = resolveStringValue(cmd, "s3-bucket", cfg.S3Bucket, "", "")  // Not in profile
-	args.S3Region = resolveStringValue(cmd, "s3-region", cfg.S3Region, "", "")  // Not in profile
+	args.Path = resolveStringValue(cmd, "path", "", "", "")                                               // Not in profile
+	args.Storage = resolveStringValue(cmd, "storage", cfg.Storage, "", "local")                           // Not in profile
+	args.S3Bucket = resolveStringValue(cmd, "s3-bucket", cfg.S3Bucket, "", "")                            // Not in profile
+	args.S3Region = resolveStringValue(cmd, "s3-region", cfg.S3Region, "", "")                            // Not in profile
+	args.GdriveCredentials = resolveStringValue(cmd, "gdrive-credentials", cfg.GdriveCredentials, "", "") // Support profile and env vars
+	args.GdriveFolder = resolveStringValue(cmd, "gdrive-folder", cfg.GdriveFolder, "", "")                // Support profile and env vars
 
 	// Format/Encoding (Format is NOT part of profile)
 	args.Format = resolveStringValue(cmd, "format", cfg.Format, "", "sql") // Not in profile

@@ -23,9 +23,11 @@ func AddSharedFlags(cmd *cobra.Command, isImportCmd bool) {
 
 	// Path and Storage flags
 	flags.StringP("path", "o", "", "Path for export files (file/folder path)")
-	flags.StringP("storage", "s", "", "Storage type (local, s3)")
+	flags.StringP("storage", "s", "", "Storage type (local, s3, gdrive)")
 	flags.String("s3-bucket", "", "S3 bucket name")
 	flags.String("s3-region", "", "S3 region")
+	flags.String("gdrive-credentials", "", "Google Drive service account credentials file path")
+	flags.String("gdrive-folder", "", "Google Drive folder ID to store files in")
 
 	// Content flags (different defaults)
 	flags.Bool("include-schema", false, "Include schema in operation")
@@ -65,6 +67,8 @@ type CommonArgs struct {
 	Storage                string
 	S3Bucket               string
 	S3Region               string
+	GdriveCredentials      string
+	GdriveFolder           string
 	Format                 string
 	IncludeSchema          bool
 	IncludeData            bool
