@@ -124,39 +124,5 @@ func getTableDefinition(conn *Connection, tableName string) (string, error) {
 
 // getSchemaColumnNames returns a list of column names for a table
 func getSchemaColumnNames(db *sql.DB, tableName string, driver string) ([]string, error) {
-	var query string
-	switch driver {
-	case DriverMySQL:
-		query = `
-			SELECT COLUMN_NAME
-			FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_SCHEMA = DATABASE()
-			AND TABLE_NAME = ?
-			ORDER BY ORDINAL_POSITION`
-	case DriverPostgres:
-		query = `
-			SELECT column_name
-			FROM information_schema.columns
-			WHERE table_name = $1
-			ORDER BY ordinal_position`
-	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnsupportedDriver, driver)
-	}
-
-	rows, err := db.Query(query, tableName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var columns []string
-	for rows.Next() {
-		var col string
-		if err := rows.Scan(&col); err != nil {
-			return nil, err
-		}
-		columns = append(columns, col)
-	}
-
-	return columns, rows.Err()
+	return getNonVirtualColumns(db, tableName, driver)
 }
