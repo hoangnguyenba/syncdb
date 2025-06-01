@@ -166,6 +166,43 @@ func unzipFile(zipPath string, destPath string) error {
 }
 
 func getImportPath(cmdArgs *CommonArgs) (string, error) {
+	// If using Google Drive storage, download the file first
+	if cmdArgs.Storage == "gdrive" {
+		// Initialize Google Drive storage
+		gdriveStore, err := storage.NewGoogleDriveStorage(cmdArgs.GdriveCredentials, cmdArgs.GdriveFolder)
+		if err != nil {
+			return "", fmt.Errorf("failed to initialize Google Drive storage: %v", err)
+		}
+
+		// Extract file name from path
+		fileName := filepath.Base(cmdArgs.Path)
+		fmt.Printf("Downloading %s from Google Drive...\n", fileName)
+
+		// Download file from Google Drive
+		data, err := gdriveStore.Download(fileName)
+		if err != nil {
+			return "", fmt.Errorf("failed to download file from Google Drive: %v", err)
+		}
+
+		// Create a temporary file to store the downloaded content
+		tempFile, err := os.CreateTemp("", "syncdb-gdrive-*"+filepath.Ext(fileName))
+		if err != nil {
+			return "", fmt.Errorf("failed to create temporary file: %v", err)
+		}
+
+		// Write the downloaded content to the temporary file
+		if err := os.WriteFile(tempFile.Name(), data, 0644); err != nil {
+			os.Remove(tempFile.Name())
+			return "", fmt.Errorf("failed to write downloaded file: %v", err)
+		}
+
+		fmt.Printf("Successfully downloaded %s to %s\n", fileName, tempFile.Name())
+
+		// Update the path to point to the downloaded file
+		cmdArgs.Path = tempFile.Name()
+	}
+
+	// Continue with existing logic for local files
 	// If path is a directory and contains metadata file, use it directly
 	if storage.IsExportPath(cmdArgs.Path) {
 		fmt.Printf("Found metadata file in %s, using this path directly\n", cmdArgs.Path)
