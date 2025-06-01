@@ -44,47 +44,46 @@ func GetProfileDir(syncDBPath string) (string, error) {
 		profileDir = filepath.Join(syncDBPath, "profiles")
 	} else {
 		// Fallback to default location based on OS
-	}
-	var configDir string
+		var configDir string
 
-
-	switch runtime.GOOS {
-	case "windows":
-		configDir, err = os.UserConfigDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to get user config directory on Windows: %w", err)
-		}
-	case "darwin":
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to get user home directory on macOS: %w", err)
-		}
-		profileDir = filepath.Join(homeDir, "Library", "Application Support", "syncdb", "profiles")
-	case "linux":
-		configDir, err = os.UserConfigDir() // Uses XDG_CONFIG_HOME or defaults to ~/.config
-		if err != nil {
-			// Fallback if UserConfigDir fails (e.g., in minimal environments)
+		switch runtime.GOOS {
+		case "windows":
+			configDir, err = os.UserConfigDir()
+			if err != nil {
+				return "", fmt.Errorf("failed to get user config directory on Windows: %w", err)
+			}
+		case "darwin":
 			homeDir, err := os.UserHomeDir()
 			if err != nil {
-				return "", fmt.Errorf("failed to get user home directory on Linux: %w", err)
+				return "", fmt.Errorf("failed to get user home directory on macOS: %w", err)
+			}
+			profileDir = filepath.Join(homeDir, "Library", "Application Support", "syncdb", "profiles")
+		case "linux":
+			configDir, err = os.UserConfigDir() // Uses XDG_CONFIG_HOME or defaults to ~/.config
+			if err != nil {
+				// Fallback if UserConfigDir fails (e.g., in minimal environments)
+				homeDir, err := os.UserHomeDir()
+				if err != nil {
+					return "", fmt.Errorf("failed to get user home directory on Linux: %w", err)
 
+				}
+				profileDir = filepath.Join(homeDir, ".config", "syncdb", "profiles")
+			}
+		default: // Other OS (e.g., BSD) - default to ~/.config
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("failed to get user home directory: %w", err)
 			}
 			profileDir = filepath.Join(homeDir, ".config", "syncdb", "profiles")
 		}
-	default: // Other OS (e.g., BSD) - default to ~/.config
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to get user home directory: %w", err)
+		// If configDir was set by the switch, use it. Otherwise, profileDir was set directly.
+		if configDir != "" {
+			profileDir = filepath.Join(configDir, "syncdb", "profiles")
 		}
-		profileDir = filepath.Join(homeDir, ".config", "syncdb", "profiles")
 	}
 	if err := os.MkdirAll(profileDir, 0750); err != nil { // Use 0750 for permissions
 		return "", fmt.Errorf("failed to create default profile directory (%s): %w", profileDir, err)
 	}
-
-	profileDir = filepath.Join(configDir, "syncdb", "profiles")
-
-
 	return profileDir, nil
 }
 
