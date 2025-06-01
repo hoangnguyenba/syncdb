@@ -278,7 +278,9 @@ func newImportCommand() *cobra.Command {
 			// Import schema if included and requested
 			if metadata.Metadata.Schema && cmdArgs.IncludeSchema {
 				fmt.Println("Importing schema...")
+				fmt.Printf("Drop database flag: %v\n", cmdArgs.Drop)
 				if cmdArgs.Drop {
+					fmt.Println("Dropping database...")
 					if err := db.DropDatabase(conn); err != nil {
 						return fmt.Errorf("failed to drop database: %v", err)
 					}

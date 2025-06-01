@@ -381,6 +381,7 @@ func DropDatabase(conn *Connection) error {
 		return fmt.Errorf("failed to drop database %s: %v", dbName, err)
 	}
 
+	fmt.Printf("Successfully dropped database: %s\n", dbName)
 	return nil
 }
 

@@ -220,10 +220,10 @@ func populateCommonArgsFromFlagsAndConfig(cmd *cobra.Command, cfg config.CommonC
 
 	// Zip is a command-time flag, not stored in profile
 	args.Zip, _ = cmd.Flags().GetBool("zip")
-
 	// Import-specific flags (not stored in profile)
 	args.DisableForeignKeyCheck, _ = cmd.Flags().GetBool("disable-foreign-key-check")
-
+	args.Drop, _ = cmd.Flags().GetBool("drop")
+	args.Truncate, _ = cmd.Flags().GetBool("truncate")
 	// Note: The 'Condition' field from the profile (loadedProfile.Condition) is not directly mapped to CommonArgs.
 	// We leave it for specific handling in export.go
 
