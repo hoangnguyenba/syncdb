@@ -11,9 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"github.com/hoangnguyenba/syncdb/pkg/db"
 
 	"github.com/hoangnguyenba/syncdb/pkg/config"
-	"github.com/hoangnguyenba/syncdb/pkg/db"
+	"github.com/hoangnguyenba/syncdb/pkg/profile"
 	"github.com/hoangnguyenba/syncdb/pkg/storage"
 	"github.com/spf13/cobra"
 )
@@ -32,6 +33,18 @@ type ExportData struct {
 	Data   map[string][]map[string]interface{} `json:"data"` // Keep this for now, might remove if not needed later
 }
 
+var (
+	exportConfig *config.Config
+)
+
+func init() {
+	var err error
+	exportConfig, err = config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
+	}
+}
+
 func newExportCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export",
@@ -47,33 +60,28 @@ func newExportCommand() *cobra.Command {
 	flags := cmd.Flags()
 	flags.Int("batch-size", 500, "Number of records to process in a batch")
 	flags.Int("limit", 0, "Maximum number of records to export per table (0 means no limit)")
-	flags.String("file-name", "", "Name for export folder/zip (default: {database name}_yyyymmdd_hhmmss)")
-	flags.String("query-separator", "\n--SYNCDB_QUERY_SEPARATOR--\n", "String used to separate SQL queries in export file (default: \\n--SYNCDB_QUERY_SEPARATOR--\\n)")
 
 	return cmd
 }
 
 // loadAndValidateArgs loads configuration, merges flags, validates required fields,
 // and establishes the initial database connection.
-func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, error) { // Changed commonArgs to CommonArgs
-	// Load config from environment
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("failed to load config: %v", err)
+func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, error) {
+	if exportConfig == nil {
+		return nil, 0, nil, fmt.Errorf("configuration not loaded")
 	}
 
 	// Get profile name from flag
 	profileName, _ := cmd.Flags().GetString("profile")
 
 	// Populate arguments from flags, config, and profile
-	cmdArgs, err := populateCommonArgsFromFlagsAndConfig(cmd, cfg.Export.CommonConfig, profileName)
+	cmdArgs, err := populateCommonArgsFromFlagsAndConfig(cmd, exportConfig.Export.CommonConfig, profileName)
 	if err != nil {
 		return nil, 0, nil, err // Return error from profile loading/parsing
 	}
 
-	// Get export-specific flags/config (batch-size and limit are not part of profile)
-	// Use the simpler helper here as profile doesn't affect these values
-	batchSize := getIntFlagWithConfigFallback(cmd, "batch-size", cfg.Export.BatchSize)
+	// Get export-specific flags/config
+	batchSize := getIntFlagWithConfigFallback(cmd, "batch-size", exportConfig.Export.BatchSize)
 	cmdArgs.RecordLimit, _ = cmd.Flags().GetInt("limit") // Default is 0 (no limit)
 
 	// Validate required values (Database name should now be resolved considering profile)
@@ -92,6 +100,13 @@ func loadAndValidateArgs(cmd *cobra.Command) (*CommonArgs, int, *db.Connection, 
 		}
 	case "gdrive":
 		creds, _ := cmd.Flags().GetString("gdrive-credentials")
+		if creds == "" {
+			syncDBDir, err := profile.GetSyncDBDir("")
+			if err != nil {
+				return nil, 0, nil, fmt.Errorf("failed to get syncdb directory: %w", err)
+			}
+			creds = filepath.Join(syncDBDir, "google-creds.json")
+		}
 		folder, _ := cmd.Flags().GetString("gdrive-folder")
 		if creds == "" {
 			return nil, 0, nil, fmt.Errorf("gdrive-credentials is required when storage is set to gdrive")

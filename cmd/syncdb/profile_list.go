@@ -22,7 +22,7 @@ func newProfileListCommand() *cobra.Command {
 }
 
 func runProfileList(cmd *cobra.Command, args []string) error {
-	profileDir, err := profile.GetProfileDir()
+	profileDir, err := profile.GetProfileDir("")
 	if err != nil {
 		// If the error is that the directory doesn't exist, that's fine, just means no profiles.
 		if os.IsNotExist(err) {
