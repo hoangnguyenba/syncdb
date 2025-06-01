@@ -17,6 +17,6 @@ test_export_gdrive:
 	./syncdb export \
 		--profile content-local-lite \
 		--storage gdrive \
-		--gdrive-credentials /home/hoang/projects/syncdb/google-creds.json \
+		--gdrive-credentials ./google-creds.json \
 		--gdrive-folder 15b-n8mPW0Hpp6hGbHShmHHkBvdC7U6d_ \
 		--include-schema=true \

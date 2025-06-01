@@ -34,20 +34,19 @@ type ProfileConfig struct {
 // GetProfileDir determines the directory where profile files are stored.
 // It checks the SYNCDB_PATH environment variable first, then falls back
 // to a default location based on the operating system.
-// It also ensures the directory exists, creating it if necessary.
-func GetProfileDir() (string, error) {
-	// Check environment variable first
-	if syncDBPath := os.Getenv("SYNCDB_PATH"); syncDBPath != "" {
-		profileDir := filepath.Join(syncDBPath, "profiles")
-		if err := os.MkdirAll(profileDir, 0750); err != nil {
-			return "", fmt.Errorf("failed to create profile directory specified by SYNCDB_PATH (%s): %w", profileDir, err)
-		}
-		return profileDir, nil
-	}
-
-	// Fallback to default location based on OS
-	var configDir string
+// It also ensures the directory exists, creating it if necessary. It uses the
+// provided syncDBPath if not empty, otherwise it falls back to a default location.
+func GetProfileDir(syncDBPath string) (string, error) {
+	var profileDir string
 	var err error
+
+	if syncDBPath != "" {
+		profileDir = filepath.Join(syncDBPath, "profiles")
+	} else {
+		// Fallback to default location based on OS
+	}
+	var configDir string
+
 
 	switch runtime.GOOS {
 	case "windows":
@@ -60,7 +59,7 @@ func GetProfileDir() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to get user home directory on macOS: %w", err)
 		}
-		configDir = filepath.Join(homeDir, "Library", "Application Support")
+		profileDir = filepath.Join(homeDir, "Library", "Application Support", "syncdb", "profiles")
 	case "linux":
 		configDir, err = os.UserConfigDir() // Uses XDG_CONFIG_HOME or defaults to ~/.config
 		if err != nil {
@@ -68,21 +67,23 @@ func GetProfileDir() (string, error) {
 			homeDir, err := os.UserHomeDir()
 			if err != nil {
 				return "", fmt.Errorf("failed to get user home directory on Linux: %w", err)
+
 			}
-			configDir = filepath.Join(homeDir, ".config")
+			profileDir = filepath.Join(homeDir, ".config", "syncdb", "profiles")
 		}
 	default: // Other OS (e.g., BSD) - default to ~/.config
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("failed to get user home directory: %w", err)
 		}
-		configDir = filepath.Join(homeDir, ".config")
+		profileDir = filepath.Join(homeDir, ".config", "syncdb", "profiles")
 	}
-
-	profileDir := filepath.Join(configDir, "syncdb", "profiles")
 	if err := os.MkdirAll(profileDir, 0750); err != nil { // Use 0750 for permissions
 		return "", fmt.Errorf("failed to create default profile directory (%s): %w", profileDir, err)
 	}
+
+	profileDir = filepath.Join(configDir, "syncdb", "profiles")
+
 
 	return profileDir, nil
 }
@@ -92,7 +93,7 @@ func GetProfilePath(profileName string) (string, error) {
 	if profileName == "" {
 		return "", errors.New("profile name cannot be empty")
 	}
-	profileDir, err := GetProfileDir()
+	profileDir, err := GetProfileDir("") // Note: GetProfileDir now requires syncDBPath, this will need to be updated where called.
 	if err != nil {
 		return "", err // Error already formatted by GetProfileDir
 	}
@@ -105,7 +106,7 @@ func GetProfilePath(profileName string) (string, error) {
 // LoadProfile reads and unmarshals a profile configuration file.
 func LoadProfile(profileName string) (*ProfileConfig, error) {
 	filePath, err := GetProfilePath(profileName)
-	if err != nil {
+	if err != nil {// This will need to be updated as GetProfilePath now calls GetProfileDir
 		return nil, err
 	}
 
@@ -139,7 +140,7 @@ func SaveProfile(profileName string, config *ProfileConfig) error {
 		return errors.New("cannot save profile: missing required 'database' field")
 	}
 
-	filePath, err := GetProfilePath(profileName)
+	filePath, err := GetProfilePath(profileName)// This will need to be updated as GetProfilePath now calls GetProfileDir
 	if err != nil {
 		return err
 	}
