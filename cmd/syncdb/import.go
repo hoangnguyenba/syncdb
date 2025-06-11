@@ -385,17 +385,18 @@ Examples:
 				availableTables[table] = true
 			}
 
-			// Get list of data files
+			// Prepare file list based on metadata table order
+			fileList := make([]string, 0)
+			tableFileMap := make(map[string]string)
+			skippedFiles := make([]string, 0)
+
+			// Read directory entries
 			entries, err := os.ReadDir(importPath)
 			if err != nil {
 				return fmt.Errorf("failed to read import directory: %v", err)
 			}
 
-			// Sort entries to ensure consistent order
-			fileList := make([]string, 0)
-			tableFileMap := make(map[string]string)
-			skippedFiles := make([]string, 0)
-
+			// Create file mapping
 			for _, entry := range entries {
 				if entry.IsDir() {
 					continue
@@ -429,7 +430,6 @@ Examples:
 
 				fmt.Printf("Found data file for table '%s': %s\n", tableName, fileName)
 				tableFileMap[tableName] = fileName
-				fileList = append(fileList, fileName)
 			}
 
 			if len(skippedFiles) > 0 {
@@ -439,35 +439,34 @@ Examples:
 				}
 			}
 
+			// Reorder fileList based on metadata table order
+			for _, table := range tablesToImport {
+				if fileName, exists := tableFileMap[table]; exists {
+					fileList = append(fileList, fileName)
+				}
+			}
+
+			if cmdArgs.FromTableIndex > 0 {
+				fileList = fileList[cmdArgs.FromTableIndex-1:]
+			}
+
 			if len(fileList) == 0 {
-				fmt.Println("No data files found to import")
+				fmt.Println("No data files found to import from the specified table index")
 				return nil
 			}
 
-			sort.Strings(fileList)
-			fmt.Printf("Found %d data files to import\n", len(fileList))
-
-			// Import each data file in order
-			startTable := 0
-			if cmdArgs.FromTableIndex > 0 {
-				startTable = cmdArgs.FromTableIndex - 1 // 1-based to 0-based
-			}
+			fmt.Printf("Found %d data files to import from table index %d\n", len(fileList), cmdArgs.FromTableIndex)
 
 			for i, fileName := range fileList {
-				if i < startTable {
-					continue
-				}
-
-				filePath := filepath.Join(importPath, fileName)
 				fmt.Printf("Importing %s...\n", fileName)
 
-				fileData, err := os.ReadFile(filePath)
+				fileData, err := os.ReadFile(filepath.Join(importPath, fileName))
 				if err != nil {
-					return fmt.Errorf("failed to read data file %s: %v", filePath, err)
+					return fmt.Errorf("failed to read data file %s: %v", fileName, err)
 				}
 
-				tableName := extractTableNameFromFile(fileName)
 				if cmdArgs.Truncate {
+					tableName := extractTableNameFromFile(fileName)
 					fmt.Printf("Truncating table '%s'...\n", tableName)
 					if err := db.TruncateTable(conn, tableName); err != nil {
 						return fmt.Errorf("failed to truncate table %s: %v", tableName, err)
@@ -483,7 +482,7 @@ Examples:
 				fmt.Printf("Processing %s: Found %d chunks to import\n", fileName, len(chunks))
 
 				startChunk := 0
-				if cmdArgs.FromChunkIndex > 0 && i == startTable {
+				if cmdArgs.FromChunkIndex > 0 && i == 0 {
 					startChunk = cmdArgs.FromChunkIndex - 1 // 1-based to 0-based
 				}
 
@@ -499,13 +498,14 @@ Examples:
 						continue
 					}
 
+					currentTableName := extractTableNameFromFile(fileName)
 					fmt.Printf("  Importing chunk %d/%d for %s (%d bytes)...\n",
-						chunkIdx+1, len(chunks), tableName, len(chunk))
+						chunkIdx+1, len(chunks), currentTableName, len(chunk))
 
 					err = db.ExecuteData(conn, chunk)
 					if err != nil {
 						// Log the failing chunk to a file for debugging
-						logFile := fmt.Sprintf("%s_chunk_%d_error.sql", tableName, chunkIdx+1)
+						logFile := fmt.Sprintf("%s_chunk_%d_error.sql", currentTableName, chunkIdx+1)
 						logErr := os.WriteFile(logFile, []byte(chunk), 0644)
 						if logErr != nil {
 							fmt.Printf("Warning: Failed to write error log: %v\n", logErr)
@@ -519,7 +519,8 @@ Examples:
 						fmt.Printf("    Progress: %d/%d chunks processed\n", processedRows, len(chunks))
 					}
 				}
-				fmt.Printf("Completed importing %s: Processed %d chunks successfully\n", tableName, processedRows)
+				fmt.Printf("Completed importing %s: Processed %d chunks successfully\n", 
+					extractTableNameFromFile(fileName), processedRows)
 			}
 
 			fmt.Println("Import completed successfully")
