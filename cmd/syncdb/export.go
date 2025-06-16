@@ -9,14 +9,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
-	"github.com/hoangnguyenba/syncdb/pkg/db"
+
+	"github.com/spf13/cobra"
 
 	"github.com/hoangnguyenba/syncdb/pkg/config"
+	"github.com/hoangnguyenba/syncdb/pkg/db"
 	"github.com/hoangnguyenba/syncdb/pkg/profile"
 	"github.com/hoangnguyenba/syncdb/pkg/storage"
-	"github.com/spf13/cobra"
 )
 
 type ExportData struct {
@@ -473,40 +477,143 @@ func writeTableDataFileWithResume(conn *db.Connection, exportPath string, table 
 	return recordCount, nil
 }
 
-// writeDataFiles iterates through tables and calls writeTableDataFile for each.
+// TableExportResult holds the result of exporting a single table
+type TableExportResult struct {
+	TableName      string
+	RecordsWritten int
+	Error          error
+}
+
+// writeDataFiles exports table data in parallel using goroutines.
 // Returns the total number of records exported across all tables.
 func writeDataFiles(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, finalTables []string, excludeDataMap map[string]bool, batchSize int) (int, error) {
-	totalRecords := 0
-	fileIndex := 1 // Start numbering from 1
-	startTable := 0
-	if cmdArgs.FromTableIndex > 0 {
-		startTable = cmdArgs.FromTableIndex - 1 // 1-based to 0-based
+	// Determine number of workers (default to number of CPU cores, but allow override via environment variable)
+	numWorkers := runtime.NumCPU() / 2
+	if envWorkers := os.Getenv("SYNCDB_EXPORT_WORKERS"); envWorkers != "" {
+		if n, err := strconv.Atoi(envWorkers); err == nil && n > 0 {
+			numWorkers = n
+		}
 	}
-	for i, table := range finalTables {
-		if i < startTable {
-			fileIndex++ // maintain correct fileIndex
-			continue
-		}
-		if excludeDataMap[table] {
-			fmt.Printf("Skipping data export for table '%s' due to exclusion.\n", table)
-			fileIndex++
-			continue
-		}
 
-		fromChunk := 0
-		if i == startTable && cmdArgs.FromChunkIndex > 0 {
-			fromChunk = cmdArgs.FromChunkIndex
-		}
+	// Create channels for work distribution and results
+	tableChan := make(chan tableWork, len(finalTables))
+	resultChan := make(chan TableExportResult, len(finalTables))
 
-		// Pass sequential file index for file naming
-		recordsWritten, err := writeTableDataFileWithResume(conn, exportPath, table, cmdArgs, batchSize, fileIndex, fromChunk)
+	// Create all worker connections first
+	workerConns := make([]*db.Connection, numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		workerConfig := conn.Config // This is a copy of the ConnectionConfig struct
+		workerConn, err := db.NewConnection(workerConfig)
 		if err != nil {
-			return totalRecords, fmt.Errorf("error exporting data for table %s: %v", table, err) // Stop on error
+			// Clean up any connections we've created so far
+			for j := 0; j < i; j++ {
+				workerConns[j].Close()
+			}
+			close(tableChan)
+			return 0, fmt.Errorf("failed to create database connection for worker %d: %v", i+1, err)
 		}
-		totalRecords += recordsWritten
-		fileIndex++ // Increment only for non-excluded tables
+		workerConns[i] = workerConn
 	}
+
+	// Make sure we close all connections when we're done
+	defer func() {
+		for _, conn := range workerConns {
+			if conn != nil {
+				conn.Close()
+			}
+		}
+	}()
+
+	// Start worker goroutines
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		// Each worker gets its own connection
+		workerConn := workerConns[i]
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for work := range tableChan {
+				recordsWritten, err := writeTableDataFileWithResume(workerConn, exportPath, work.Table, cmdArgs, batchSize, work.FileIndex, work.FromChunk)
+				resultChan <- TableExportResult{
+					TableName:      work.Table,
+					RecordsWritten: recordsWritten,
+					Error:          err,
+				}
+			}
+		}()
+	}
+
+	// Send work to workers in a separate goroutine
+	go func() {
+		fileIndex := 1
+		startTable := 0
+		if cmdArgs.FromTableIndex > 0 {
+			startTable = cmdArgs.FromTableIndex - 1 // 1-based to 0-based
+		}
+
+		for i, table := range finalTables {
+			if i < startTable {
+				fileIndex++
+				continue
+			}
+
+			if excludeDataMap[table] {
+				fmt.Printf("Skipping data export for table '%s' due to exclusion.\n", table)
+				fileIndex++
+				continue
+			}
+
+			fromChunk := 0
+			if i == startTable && cmdArgs.FromChunkIndex > 0 {
+				fromChunk = cmdArgs.FromChunkIndex
+			}
+
+			tableChan <- tableWork{
+				Table:     table,
+				FileIndex: fileIndex,
+				FromChunk: fromChunk,
+			}
+			fileIndex++
+		}
+		close(tableChan)
+	}()
+
+	// Close result channel when all workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	var totalRecords int
+	var errors []string
+
+	for result := range resultChan {
+		if result.Error != nil {
+			errMsg := fmt.Sprintf("error exporting table %s: %v", result.TableName, result.Error)
+			errors = append(errors, errMsg)
+			// Continue processing other tables instead of failing immediately
+			continue
+		}
+		totalRecords += result.RecordsWritten
+		fmt.Printf("Exported %d records from table '%s'\n", result.RecordsWritten, result.TableName)
+	}
+
+	// If there were any errors, return them all
+	if len(errors) > 0 {
+		return totalRecords, fmt.Errorf("encountered %d errors during export:\n%s",
+			len(errors), strings.Join(errors, "\n"))
+	}
+
 	return totalRecords, nil
+}
+
+// tableWork represents a unit of work for exporting a single table
+type tableWork struct {
+	Table     string
+	FileIndex int
+	FromChunk int
 }
 
 // Helper for chunk resume
