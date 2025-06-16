@@ -214,10 +214,11 @@ func getFinalTables(conn *db.Connection, cmdArgs *CommonArgs) ([]string, map[str
 		excludeDataMap[t] = true
 	}
 
-	// Filter out excluded tables and tables with excluded data while preserving dependency order
+	// Filter out only completely excluded tables while preserving dependency order
+	// Tables in excludeDataMap will still be included in finalTables but their data won't be exported
 	var finalTables []string
 	for _, t := range sortedTables {
-		if !excludeTableMap[t] && !excludeDataMap[t] && (len(expandedInclude) == 0 || expandedInclude[t]) {
+		if !excludeTableMap[t] && (len(expandedInclude) == 0 || expandedInclude[t]) {
 			finalTables = append(finalTables, t)
 		}
 	}
