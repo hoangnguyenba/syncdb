@@ -457,17 +457,17 @@ func ExecuteData(conn *Connection, dataSQL string) error {
 			return fmt.Errorf("failed to disable foreign key checks: %v", err)
 		}
 		// Allow zero datetime values
-		if _, err := conn.DB.Exec("SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_ZERO_IN_DATE,NO_ZERO_DATE', '')"); err != nil {
-			return fmt.Errorf("failed to configure sql_mode for zero dates: %v", err)
-		}
+		// if _, err := conn.DB.Exec("SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_ZERO_IN_DATE,NO_ZERO_DATE', '')"); err != nil {
+		// 	return fmt.Errorf("failed to configure sql_mode for zero dates: %v", err)
+		// }
 		defer func() {
 			// Restore default settings
 			if _, err := conn.DB.Exec("SET FOREIGN_KEY_CHECKS = 1"); err != nil {
 				fmt.Printf("Warning: failed to re-enable foreign key checks: %v\n", err)
 			}
-			if _, err := conn.DB.Exec("SET SESSION sql_mode = @@GLOBAL.sql_mode"); err != nil {
-				fmt.Printf("Warning: failed to restore sql_mode: %v\n", err)
-			}
+			// if _, err := conn.DB.Exec("SET SESSION sql_mode = @@GLOBAL.sql_mode"); err != nil {
+			// 	fmt.Printf("Warning: failed to restore sql_mode: %v\n", err)
+			// }
 		}()
 	}
 

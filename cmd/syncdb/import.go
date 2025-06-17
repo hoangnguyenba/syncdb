@@ -340,20 +340,50 @@ Examples:
 
 			fmt.Printf("Tables to import: %v\n", tablesToImport)
 
+			// Read schema file first to get SQL mode if it exists
+			var sqlMode string
+			if metadata.Metadata.Schema && cmdArgs.IncludeSchema {
+				schemaFile := filepath.Join(importPath, "0_schema.sql")
+				schemaData, err := os.ReadFile(schemaFile)
+				if err != nil {
+					return fmt.Errorf("failed to read schema file: %v", err)
+				}
+
+				// Extract SQL mode from schema file if it exists
+				lines := strings.Split(string(schemaData), "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "-- SQL_MODE=") {
+						sqlMode = strings.TrimPrefix(line, "-- SQL_MODE=")
+						break
+					}
+				}
+			}
+
+			// Handle drop and recreate database if requested
+			if cmdArgs.Drop {
+				fmt.Println("Dropping and recreating database...")
+				if err := db.DropDatabase(conn); err != nil {
+					return fmt.Errorf("failed to drop database: %v", err)
+				}
+				if err := db.CreateDatabase(conn); err != nil {
+					return fmt.Errorf("failed to create database: %v", err)
+				}
+
+				// Set SQL mode if it was found in the schema file
+				if sqlMode != "" && conn.Config.Driver == "mysql" {
+					setModeSQL := fmt.Sprintf("SET GLOBAL sql_mode = '%s'", strings.TrimSpace(sqlMode))
+					_, err := conn.DB.Exec(setModeSQL)
+					if err != nil {
+						return fmt.Errorf("failed to set global SQL mode to '%s': %v", sqlMode, err)
+					}
+					fmt.Printf("Set global SQL mode to: %s\n", sqlMode)
+				}
+			}
+
 			// Import schema if included and requested
 			if metadata.Metadata.Schema && cmdArgs.IncludeSchema {
 				fmt.Println("Importing schema...")
-				fmt.Printf("Drop database flag: %v\n", cmdArgs.Drop)
-				if cmdArgs.Drop {
-					fmt.Println("Dropping database...")
-					if err := db.DropDatabase(conn); err != nil {
-						return fmt.Errorf("failed to drop database: %v", err)
-					}
-					if err := db.CreateDatabase(conn); err != nil {
-						return fmt.Errorf("failed to create database: %v", err)
-					}
-				}
-
 				schemaFile := filepath.Join(importPath, "0_schema.sql")
 				schemaData, err := os.ReadFile(schemaFile)
 				if err != nil {
@@ -560,19 +590,29 @@ func extractTableNameFromSchema(stmt string) string {
 }
 
 func importSchema(conn *db.Connection, schemaContent []byte) error {
-	// First pass: collect all CREATE TABLE statements
+	// First pass: collect SQL mode and CREATE TABLE statements
 	createTableStatements := make(map[string]string)
 	var currentStatement strings.Builder
+	sqlMode := ""
 
 	lines := strings.Split(string(schemaContent), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "--") {
+		if line == "" {
+			continue
+		}
+
+		// Check for SQL mode comment
+		if strings.HasPrefix(line, "--") {
+			if strings.HasPrefix(line, "-- SQL_MODE=") {
+				sqlMode = strings.TrimPrefix(line, "-- SQL_MODE=")
+			}
 			continue
 		}
 
 		currentStatement.WriteString(line)
 		currentStatement.WriteString("\n")
+
 
 		if strings.HasSuffix(line, ";") {
 			stmt := currentStatement.String()
@@ -615,6 +655,16 @@ func importSchema(conn *db.Connection, schemaContent []byte) error {
 		tables = append(tables, t)
 	}
 	sortedTables := db.SortTablesByDependencies(tables, deps)
+
+	// Set SQL mode if specified and this is MySQL
+	if sqlMode != "" && conn.Config.Driver == "mysql" {
+		setModeSQL := fmt.Sprintf("SET SESSION sql_mode = '%s'", strings.TrimSpace(sqlMode))
+		_, err := conn.DB.Exec(setModeSQL)
+		if err != nil {
+			return fmt.Errorf("failed to set SQL mode to '%s': %v", sqlMode, err)
+		}
+		fmt.Printf("Set SQL mode to: %s\n", sqlMode)
+	}
 
 	// Start a transaction for schema changes
 	tx, err := conn.DB.Begin()

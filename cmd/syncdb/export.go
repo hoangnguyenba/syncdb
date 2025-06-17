@@ -265,7 +265,7 @@ func writeMetadata(exportPath string, cmdArgs *CommonArgs, finalTables []string)
 }
 
 // writeSchema fetches and writes the schema definitions to a file (SQL or JSON).
-func writeSchema(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, finalTables []string, excludeSchemaMap map[string]bool) error { // Changed commonArgs to CommonArgs
+func writeSchema(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, finalTables []string, excludeSchemaMap map[string]bool) error {
 	schemaDefinitions := make(map[string]string)
 	for _, table := range finalTables {
 		if excludeSchemaMap[table] {
@@ -279,14 +279,31 @@ func writeSchema(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, fi
 		schemaDefinitions[table] = schema.Definition
 	}
 
+	// Get SQL mode for MySQL databases
+	var sqlMode string
+	if conn.Config.Driver == "mysql" {
+		err := conn.DB.QueryRow("SELECT @@SESSION.sql_mode").Scan(&sqlMode)
+		if err != nil {
+			return fmt.Errorf("failed to get SQL mode: %v", err)
+		}
+		schemaDefinitions["__sql_mode"] = sqlMode
+	}
+
 	// Write schema based on format
 	var schemaData []byte
-	var schemaFileName string
+	schemaFileName := ""
 	var err error
 
 	if cmdArgs.Format == "sql" {
 		schemaFileName = "0_schema.sql"
 		var schemaOutput []string
+
+		// Add SQL mode as a comment at the top of the file for MySQL
+		if sqlMode, ok := schemaDefinitions["__sql_mode"]; ok && sqlMode != "" {
+			schemaOutput = append(schemaOutput, fmt.Sprintf("-- SQL_MODE=%s\n\n", sqlMode))
+			delete(schemaDefinitions, "__sql_mode") // Remove from the table definitions
+		}
+
 		// Ensure consistent order for SQL output (iterate over finalTables which is sorted)
 		for _, table := range finalTables {
 			if definition, ok := schemaDefinitions[table]; ok {
