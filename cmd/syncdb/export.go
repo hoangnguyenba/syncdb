@@ -511,6 +511,9 @@ func writeDataFiles(conn *db.Connection, exportPath string, cmdArgs *CommonArgs,
 			numWorkers = n
 		}
 	}
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
 
 	// Create channels for work distribution and results
 	tableChan := make(chan tableWork, len(finalTables))
