@@ -299,8 +299,8 @@ func writeSchema(conn *db.Connection, exportPath string, cmdArgs *CommonArgs, fi
 		var schemaOutput []string
 
 		// Add SQL mode as a comment at the top of the file for MySQL
-		if sqlMode, ok := schemaDefinitions["__sql_mode"]; ok && sqlMode != "" {
-			schemaOutput = append(schemaOutput, fmt.Sprintf("-- SQL_MODE=%s\n\n", sqlMode))
+		if sqlMode, ok := schemaDefinitions["__sql_mode"]; ok {
+			schemaOutput = append(schemaOutput, fmt.Sprintf("-- SQL_MODE=%s", sqlMode))
 			delete(schemaDefinitions, "__sql_mode") // Remove from the table definitions
 		}
 

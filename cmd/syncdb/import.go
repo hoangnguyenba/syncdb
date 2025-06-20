@@ -371,7 +371,7 @@ Examples:
 				}
 
 				// Set SQL mode if it was found in the schema file
-				if sqlMode != "" && conn.Config.Driver == "mysql" {
+				if conn.Config.Driver == "mysql" {
 					setModeSQL := fmt.Sprintf("SET GLOBAL sql_mode = '%s'", strings.TrimSpace(sqlMode))
 					_, err := conn.DB.Exec(setModeSQL)
 					if err != nil {
@@ -549,7 +549,7 @@ Examples:
 						fmt.Printf("    Progress: %d/%d chunks processed\n", processedRows, len(chunks))
 					}
 				}
-				fmt.Printf("Completed importing %s: Processed %d chunks successfully\n", 
+				fmt.Printf("Completed importing %s: Processed %d chunks successfully\n",
 					extractTableNameFromFile(fileName), processedRows)
 			}
 
@@ -613,7 +613,6 @@ func importSchema(conn *db.Connection, schemaContent []byte) error {
 		currentStatement.WriteString(line)
 		currentStatement.WriteString("\n")
 
-
 		if strings.HasSuffix(line, ";") {
 			stmt := currentStatement.String()
 			if strings.Contains(strings.ToUpper(stmt), "CREATE TABLE") {
@@ -621,7 +620,7 @@ func importSchema(conn *db.Connection, schemaContent []byte) error {
 				tableName := extractTableNameFromSchema(stmt)
 				if tableName != "" {
 					createTableStatements[tableName] = stmt
-					fmt.Printf("Found CREATE TABLE for %s\n", tableName)
+					// fmt.Printf("Found CREATE TABLE for %s\n", tableName)
 				}
 			}
 			currentStatement.Reset()
@@ -703,7 +702,7 @@ func importSchema(conn *db.Connection, schemaContent []byte) error {
 			}
 
 			stmt := createTableStatements[tableName]
-			fmt.Printf("Creating table %s... (attempt %d)\n", tableName, attempt+1)
+			// fmt.Printf("Creating table %s... (attempt %d)\n", tableName, attempt+1)
 
 			// Try to create the table
 			_, err = tx.Exec(stmt)
@@ -719,7 +718,7 @@ func importSchema(conn *db.Connection, schemaContent []byte) error {
 			}
 
 			executedTables[tableName] = true
-			fmt.Printf("Successfully created table %s\n", tableName)
+			// fmt.Printf("Successfully created table %s\n", tableName)
 		}
 
 		// If no tables were skipped or no progress was made, we're done
