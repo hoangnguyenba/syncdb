@@ -79,13 +79,7 @@ func ExportTableData(conn *Connection, tableName string, writer io.Writer) error
 					continue
 				}
 
-				// Attempt to decode base64 values
-				decodedStr, err := tryBase64Decode(strVal)
-				if err == nil && decodedStr != strVal {
-					rowData[col] = decodedStr
-				} else {
-					rowData[col] = strVal
-				}
+				rowData[col] = strVal
 			}
 		}
 
